@@ -1,0 +1,41 @@
+# --- Build / CMake ---
+/build/
+/out/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+
+# CMake presets generated per-user
+CMakeUserPresets.json
+
+# --- MSVC / Visual Studio ---
+/.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
+ipch/
+
+# Intermediate / output artifacts
+*.obj
+*.pdb
+*.ilk
+*.tlog
+*.log
+*.idb
+*.iobj
+*.ipdb
+*.exp
+*.lib
+*.dll
+*.exe
+*.recipe
+
+# --- Editors ---
+/.vscode/
+/.idea/
+
