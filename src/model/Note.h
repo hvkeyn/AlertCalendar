@@ -13,7 +13,8 @@ struct Note {
   std::wstring id;
   std::wstring title;
 
-  int64_t scheduledAtUtcMs = 0;
+  int64_t scheduledAtUtcMs = 0;      // Время начала события (UTC ms)
+  int reminderMinutesBefore = 0;     // За сколько минут до начала напомнить (0 = в момент начала)
   int importance = 0; // 0..2 (обычная/важная/срочная)
   int category = 0;   // 0=нет, 1=жёлтая, 2=зелёная, 3=красная, 4=лиловая, 5=оранжевая, 6=синяя
 

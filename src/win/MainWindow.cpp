@@ -60,6 +60,7 @@ constexpr int IDC_COMBO_SOUND_URGENT = 1124;
 constexpr int IDC_BTN_TEST_SOUND = 1125;
 constexpr int IDC_BTN_PREVIEW_POPUP = 1126;
 constexpr int IDC_COMBO_CATEGORY = 1127;
+constexpr int IDC_COMBO_REMINDER = 1128;
 
 constexpr UINT WM_APP_TRAY = WM_APP + 1;
 
@@ -73,6 +74,37 @@ constexpr int ID_TRAY_THEME_MINIMAL = 40007;
 
 constexpr UINT_PTR TIMER_AUTOSAVE = 2;
 constexpr int AUTOSAVE_DELAY_MS = 800;
+
+// Reminder combo index <-> minutes conversion
+// 0=В начало(0), 1=5мин, 2=10мин, 3=15мин, 4=30мин, 5=1час(60), 6=2часа(120), 7=4часа(240), 8=1день(1440), 9=1неделя(10080)
+int reminderComboIndexToMinutes(int idx) {
+  switch (idx) {
+    case 0: return 0;
+    case 1: return 5;
+    case 2: return 10;
+    case 3: return 15;
+    case 4: return 30;
+    case 5: return 60;
+    case 6: return 120;
+    case 7: return 240;
+    case 8: return 1440;
+    case 9: return 10080;
+    default: return 0;
+  }
+}
+
+int reminderMinutesToComboIndex(int minutes) {
+  if (minutes <= 0) return 0;
+  if (minutes <= 5) return 1;
+  if (minutes <= 10) return 2;
+  if (minutes <= 15) return 3;
+  if (minutes <= 30) return 4;
+  if (minutes <= 60) return 5;
+  if (minutes <= 120) return 6;
+  if (minutes <= 240) return 7;
+  if (minutes <= 1440) return 8;
+  return 9;
+}
 
 void listViewInitColumns(HWND list) {
   ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
@@ -227,7 +259,7 @@ bool MainWindow::create() {
     kClassName,
     L"AlertCalendar",
     WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-    CW_USEDEFAULT, CW_USEDEFAULT, 1100, 700,
+    CW_USEDEFAULT, CW_USEDEFAULT, 1200, 750,
     nullptr,
     nullptr,
     m_hInstance,
@@ -286,6 +318,12 @@ LRESULT MainWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_SIZE:
       onSize(LOWORD(lParam), HIWORD(lParam));
       return 0;
+    case WM_GETMINMAXINFO: {
+      MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+      mmi->ptMinTrackSize.x = 900;
+      mmi->ptMinTrackSize.y = 600;
+      return 0;
+    }
     case WM_ERASEBKGND: {
       HDC hdc = reinterpret_cast<HDC>(wParam);
       RECT rc{};
@@ -325,6 +363,12 @@ LRESULT MainWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
           }
           break;
         case IDC_COMBO_CATEGORY:
+          if (HIWORD(wParam) == CBN_SELCHANGE) {
+            markEditorDirty();
+            return 0;
+          }
+          break;
+        case IDC_COMBO_REMINDER:
           if (HIWORD(wParam) == CBN_SELCHANGE) {
             markEditorDirty();
             return 0;
@@ -494,7 +538,7 @@ void MainWindow::onCreate() {
   );
 
   m_lblTime = CreateWindowExW(
-    0, L"STATIC", L"Время:",
+    0, L"STATIC", L"Начало:",
     WS_CHILD | WS_VISIBLE | SS_LEFT,
     520, 294, 60, 20,
     m_hwnd, nullptr, m_hInstance, nullptr
@@ -565,6 +609,37 @@ void MainWindow::onCreate() {
   SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Оранжевая"));
   SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Синяя"));
   SendMessageW(m_comboCategory, CB_SETCURSEL, 0, 0);
+
+  m_lblReminder = CreateWindowExW(
+    0, L"STATIC", L"Напомнить:",
+    WS_CHILD | WS_VISIBLE | SS_LEFT,
+    1130, 294, 80, 20,
+    m_hwnd, nullptr, m_hInstance, nullptr
+  );
+
+  m_comboReminder = CreateWindowExW(
+    0,
+    WC_COMBOBOXW,
+    nullptr,
+    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
+    1215, 292, 120, 300,
+    m_hwnd,
+    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_COMBO_REMINDER)),
+    m_hInstance,
+    nullptr
+  );
+  SetWindowTheme(m_comboReminder, L"Explorer", nullptr);
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"В начало"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"5 мин"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"10 мин"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"15 мин"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"30 мин"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"1 час"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"2 часа"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"4 часа"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"1 день"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"1 неделя"));
+  SendMessageW(m_comboReminder, CB_SETCURSEL, 0, 0);
 
   m_chkAutoHide = CreateWindowExW(
     0,
@@ -860,6 +935,8 @@ void MainWindow::onCreate() {
   SendMessageW(m_comboImportance, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_lblCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_comboCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
+  SendMessageW(m_lblReminder, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
+  SendMessageW(m_comboReminder, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_chkAutoHide, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_editAutoHideSeconds, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnSave, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
@@ -1006,8 +1083,8 @@ void MainWindow::onSize(int width, int height) {
   const int usableH = height - top - margin;
   const int usableW = width - margin * 2;
   
-  // Left side: calendar (40% width)
-  const int leftW = std::max(sx(300), (usableW * 40) / 100);
+  // Left side: calendar (35% width)
+  const int leftW = std::max(sx(280), (usableW * 35) / 100);
   // Right side: list + editor
   const int rightW = usableW - leftW - margin;
   const int rightX = margin + leftW + margin;
@@ -1030,32 +1107,44 @@ void MainWindow::onSize(int width, int height) {
   MoveWindow(m_editTitle, rightX, y, rightW, fieldH, TRUE);
   y += fieldH + gap;
 
-  // Time, Importance, Autohide row
-  const int timeW = sx(100);
-  const int impW = sx(130);
-  const int secW = sx(50);
-  const int autoHideW = sx(130);
+  // Row 1: Начало + Важность + Категория
+  const int timeW = sx(90);
+  const int impW = sx(95);
+  const int catW = sx(95);
+  const int remW = sx(95);
+  const int secW = sx(45);
+  const int autoHideW = sx(100);
+  const int lblW = sx(55);
 
-  MoveWindow(m_lblTime, rightX, y + sx(4), sx(55), labelH, TRUE);
-  MoveWindow(m_timePicker, rightX + sx(55), y, timeW, fieldH, TRUE);
+  int rx = rightX;
+  MoveWindow(m_lblTime, rx, y + sx(4), lblW, labelH, TRUE);
+  rx += lblW;
+  MoveWindow(m_timePicker, rx, y, timeW, fieldH, TRUE);
+  rx += timeW + gap;
 
-  const int impX = rightX + sx(55) + timeW + gap;
-  MoveWindow(m_lblImportance, impX, y + sx(4), sx(70), labelH, TRUE);
-  MoveWindow(m_comboImportance, impX + sx(70), y, impW, fieldH * 6, TRUE);
+  MoveWindow(m_lblImportance, rx, y + sx(4), lblW, labelH, TRUE);
+  rx += lblW;
+  MoveWindow(m_comboImportance, rx, y, impW, fieldH * 6, TRUE);
+  rx += impW + gap;
 
-  const int catW = sx(110);
-  const int catX = impX + sx(70) + impW + gap;
-  MoveWindow(m_lblCategory, catX, y + sx(4), sx(70), labelH, TRUE);
-  MoveWindow(m_comboCategory, catX + sx(70), y, catW, fieldH * 6, TRUE);
+  MoveWindow(m_lblCategory, rx, y + sx(4), lblW, labelH, TRUE);
+  rx += lblW;
+  MoveWindow(m_comboCategory, rx, y, catW, fieldH * 6, TRUE);
+  y += fieldH + gap;
 
-  const int autoX = catX + sx(70) + catW + gap;
-  MoveWindow(m_chkAutoHide, autoX, y + sx(2), autoHideW, fieldH, TRUE);
-  MoveWindow(m_editAutoHideSeconds, autoX + autoHideW + sx(4), y, secW, fieldH, TRUE);
-  // UpDown (arrows) must be moved together with its buddy edit, otherwise it "lags" on zoom/resize.
+  // Row 2: Напомнить + Автоскрытие
+  rx = rightX;
+  MoveWindow(m_lblReminder, rx, y + sx(4), lblW, labelH, TRUE);
+  rx += lblW;
+  MoveWindow(m_comboReminder, rx, y, remW, fieldH * 10, TRUE);
+  rx += remW + gap * 2;
+
+  MoveWindow(m_chkAutoHide, rx, y + sx(2), autoHideW, fieldH, TRUE);
+  rx += autoHideW + sx(4);
+  MoveWindow(m_editAutoHideSeconds, rx, y, secW, fieldH, TRUE);
   if (m_spinAutoHideSeconds) {
-    const int spinW = std::max(sx(16), GetSystemMetrics(SM_CXVSCROLL));
-    // Place inside the right edge of the buddy edit (integrated look).
-    const int spinX = autoX + autoHideW + sx(4) + secW - spinW;
+    const int spinW = std::max(sx(14), GetSystemMetrics(SM_CXVSCROLL));
+    const int spinX = rx + secW - spinW;
     MoveWindow(m_spinAutoHideSeconds, spinX, y, spinW, fieldH, TRUE);
   }
   y += fieldH + gap;
@@ -1425,6 +1514,7 @@ void MainWindow::clearEditor() {
   setControlText(m_editTitle, L"");
   SendMessageW(m_comboImportance, CB_SETCURSEL, 0, 0);
   SendMessageW(m_comboCategory, CB_SETCURSEL, 0, 0);
+  SendMessageW(m_comboReminder, CB_SETCURSEL, 0, 0);
   SendMessageW(m_chkAutoHide, BM_SETCHECK, BST_UNCHECKED, 0);
   setControlText(m_editAutoHideSeconds, L"5");
   updateAutoHideEnabled();
@@ -1451,6 +1541,7 @@ void MainWindow::loadNoteToEditor(const Note& note) {
   setControlText(m_editTitle, note.title);
   SendMessageW(m_comboImportance, CB_SETCURSEL, note.importance, 0);
   SendMessageW(m_comboCategory, CB_SETCURSEL, std::clamp(note.category, 0, 6), 0);
+  SendMessageW(m_comboReminder, CB_SETCURSEL, reminderMinutesToComboIndex(note.reminderMinutesBefore), 0);
   SendMessageW(m_chkAutoHide, BM_SETCHECK, note.autoHideEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
   setControlText(m_editAutoHideSeconds, std::to_wstring(std::max(1, note.autoHideSeconds)));
   updateAutoHideEnabled();
@@ -1517,6 +1608,9 @@ void MainWindow::saveEditorToNote(bool refreshAfter) {
 
   const int cat = static_cast<int>(SendMessageW(m_comboCategory, CB_GETCURSEL, 0, 0));
   n.category = std::clamp(cat, 0, 6);
+
+  const int reminderIdx = static_cast<int>(SendMessageW(m_comboReminder, CB_GETCURSEL, 0, 0));
+  n.reminderMinutesBefore = reminderComboIndexToMinutes(reminderIdx);
 
   n.autoHideEnabled = (SendMessageW(m_chkAutoHide, BM_GETCHECK, 0, 0) == BST_CHECKED);
   n.autoHideSeconds = std::clamp(toIntOr(getControlText(m_editAutoHideSeconds), 5), 1, 3600);
@@ -2053,6 +2147,8 @@ void MainWindow::applyUiZoom() {
   SendMessageW(m_comboImportance, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_lblCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_comboCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_lblReminder, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_comboReminder, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_chkAutoHide, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_editAutoHideSeconds, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnSave, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);

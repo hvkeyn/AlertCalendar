@@ -113,6 +113,7 @@ bool readMeta(const std::wstring& id, Note& out, std::wstring* errorOut) {
   out.scheduledAtUtcMs = getI64("scheduledAtUtcMs", 0);
   out.importance = getI("importance", 0);
   out.category = getI("category", 0);
+  out.reminderMinutesBefore = getI("reminderMinutesBefore", 0);
   out.contentMode = static_cast<NoteContentMode>(getI("contentMode", 0));
   out.autoHideEnabled = getI("autoHideEnabled", 0) != 0;
   out.autoHideSeconds = getI("autoHideSeconds", 0);
@@ -163,6 +164,7 @@ bool writeMeta(const Note& n, std::wstring* errorOut) {
   ss << "scheduledAtUtcMs=" << n.scheduledAtUtcMs << "\n";
   ss << "importance=" << n.importance << "\n";
   ss << "category=" << n.category << "\n";
+  ss << "reminderMinutesBefore=" << n.reminderMinutesBefore << "\n";
   ss << "contentMode=" << static_cast<int>(n.contentMode) << "\n";
   ss << "autoHideEnabled=" << (n.autoHideEnabled ? 1 : 0) << "\n";
   ss << "autoHideSeconds=" << n.autoHideSeconds << "\n";
@@ -357,7 +359,9 @@ std::vector<Note> NoteRepository::listDue(int64_t nowUtcMs, int limit, std::wstr
 
       if (n.hasFired) continue;
       if (n.scheduledAtUtcMs == 0) continue;
-      if (n.scheduledAtUtcMs <= nowUtcMs) {
+      // Уведомление показывается за reminderMinutesBefore минут до начала события
+      const int64_t reminderTimeMs = n.scheduledAtUtcMs - static_cast<int64_t>(n.reminderMinutesBefore) * 60000;
+      if (reminderTimeMs <= nowUtcMs) {
         out.push_back(std::move(n));
       }
     }

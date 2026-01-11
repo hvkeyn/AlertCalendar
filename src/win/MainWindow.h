@@ -93,6 +93,8 @@ private:
   HWND m_comboImportance{};
   HWND m_lblCategory{};
   HWND m_comboCategory{};
+  HWND m_lblReminder{};
+  HWND m_comboReminder{};
   HWND m_chkAutoHide{};
   HWND m_editAutoHideSeconds{};
   HWND m_spinAutoHideSeconds{};
