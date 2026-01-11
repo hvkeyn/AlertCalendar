@@ -15,6 +15,7 @@ struct Note {
 
   int64_t scheduledAtUtcMs = 0;
   int importance = 0; // 0..2 (обычная/важная/срочная)
+  int category = 0;   // 0=нет, 1=жёлтая, 2=зелёная, 3=красная, 4=лиловая, 5=оранжевая, 6=синяя
 
   NoteContentMode contentMode = NoteContentMode::VisualRtf;
   std::wstring contentRtf;

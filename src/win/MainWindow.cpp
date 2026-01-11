@@ -59,6 +59,7 @@ constexpr int IDC_COMBO_SOUND_IMPORTANT = 1123;
 constexpr int IDC_COMBO_SOUND_URGENT = 1124;
 constexpr int IDC_BTN_TEST_SOUND = 1125;
 constexpr int IDC_BTN_PREVIEW_POPUP = 1126;
+constexpr int IDC_COMBO_CATEGORY = 1127;
 
 constexpr UINT WM_APP_TRAY = WM_APP + 1;
 
@@ -323,6 +324,12 @@ LRESULT MainWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
           }
           break;
+        case IDC_COMBO_CATEGORY:
+          if (HIWORD(wParam) == CBN_SELCHANGE) {
+            markEditorDirty();
+            return 0;
+          }
+          break;
         case IDC_CHK_SOUND:
           if (HIWORD(wParam) == BN_CLICKED) {
             const bool enabled = (SendMessageW(m_chkSound, BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -530,6 +537,34 @@ void MainWindow::onCreate() {
   SendMessageW(m_comboImportance, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Важно"));
   SendMessageW(m_comboImportance, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Срочно"));
   SendMessageW(m_comboImportance, CB_SETCURSEL, 0, 0);
+
+  m_lblCategory = CreateWindowExW(
+    0, L"STATIC", L"Категория:",
+    WS_CHILD | WS_VISIBLE | SS_LEFT,
+    910, 294, 80, 20,
+    m_hwnd, nullptr, m_hInstance, nullptr
+  );
+
+  m_comboCategory = CreateWindowExW(
+    0,
+    WC_COMBOBOXW,
+    nullptr,
+    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
+    995, 292, 130, 200,
+    m_hwnd,
+    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_COMBO_CATEGORY)),
+    m_hInstance,
+    nullptr
+  );
+  SetWindowTheme(m_comboCategory, L"Explorer", nullptr);
+  SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Без категории"));
+  SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Жёлтая"));
+  SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Зелёная"));
+  SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Красная"));
+  SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Лиловая"));
+  SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Оранжевая"));
+  SendMessageW(m_comboCategory, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Синяя"));
+  SendMessageW(m_comboCategory, CB_SETCURSEL, 0, 0);
 
   m_chkAutoHide = CreateWindowExW(
     0,
@@ -823,6 +858,8 @@ void MainWindow::onCreate() {
   SendMessageW(m_timePicker, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_lblImportance, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_comboImportance, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
+  SendMessageW(m_lblCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
+  SendMessageW(m_comboCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_chkAutoHide, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_editAutoHideSeconds, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnSave, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
@@ -1003,10 +1040,15 @@ void MainWindow::onSize(int width, int height) {
   MoveWindow(m_timePicker, rightX + sx(55), y, timeW, fieldH, TRUE);
 
   const int impX = rightX + sx(55) + timeW + gap;
-  MoveWindow(m_lblImportance, impX, y + sx(4), sx(75), labelH, TRUE);
-  MoveWindow(m_comboImportance, impX + sx(75), y, impW, fieldH * 6, TRUE);
+  MoveWindow(m_lblImportance, impX, y + sx(4), sx(70), labelH, TRUE);
+  MoveWindow(m_comboImportance, impX + sx(70), y, impW, fieldH * 6, TRUE);
 
-  const int autoX = impX + sx(75) + impW + gap;
+  const int catW = sx(110);
+  const int catX = impX + sx(70) + impW + gap;
+  MoveWindow(m_lblCategory, catX, y + sx(4), sx(70), labelH, TRUE);
+  MoveWindow(m_comboCategory, catX + sx(70), y, catW, fieldH * 6, TRUE);
+
+  const int autoX = catX + sx(70) + catW + gap;
   MoveWindow(m_chkAutoHide, autoX, y + sx(2), autoHideW, fieldH, TRUE);
   MoveWindow(m_editAutoHideSeconds, autoX + autoHideW + sx(4), y, secW, fieldH, TRUE);
   // UpDown (arrows) must be moved together with its buddy edit, otherwise it "lags" on zoom/resize.
@@ -1382,6 +1424,7 @@ void MainWindow::clearEditor() {
   m_loadingEditor = true;
   setControlText(m_editTitle, L"");
   SendMessageW(m_comboImportance, CB_SETCURSEL, 0, 0);
+  SendMessageW(m_comboCategory, CB_SETCURSEL, 0, 0);
   SendMessageW(m_chkAutoHide, BM_SETCHECK, BST_UNCHECKED, 0);
   setControlText(m_editAutoHideSeconds, L"5");
   updateAutoHideEnabled();
@@ -1407,6 +1450,7 @@ void MainWindow::loadNoteToEditor(const Note& note) {
 
   setControlText(m_editTitle, note.title);
   SendMessageW(m_comboImportance, CB_SETCURSEL, note.importance, 0);
+  SendMessageW(m_comboCategory, CB_SETCURSEL, std::clamp(note.category, 0, 6), 0);
   SendMessageW(m_chkAutoHide, BM_SETCHECK, note.autoHideEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
   setControlText(m_editAutoHideSeconds, std::to_wstring(std::max(1, note.autoHideSeconds)));
   updateAutoHideEnabled();
@@ -1439,15 +1483,9 @@ void MainWindow::addNewNote() {
   n.contentMode = NoteContentMode::VisualRtf;
   n.contentRtf = L"{\\rtf1\\ansi\\deff0\\fs24 }";
 
-  SYSTEMTIME st = selectedDateLocal();
-  // Default time: current local time (rounded to minutes)
-  SYSTEMTIME now{};
-  GetLocalTime(&now);
-  st.wHour = now.wHour;
-  st.wMinute = now.wMinute;
-  st.wSecond = 0;
-  st.wMilliseconds = 0;
-  n.scheduledAtUtcMs = TimeUtils::localSystemTimeToUnixMsUtc(st);
+  // Default time: +1 hour from now (so reminder doesn't fire immediately)
+  const int64_t nowMs = TimeUtils::unixMsNowUtc();
+  n.scheduledAtUtcMs = nowMs + 60 * 60 * 1000; // +1 hour
 
   n.autoHideEnabled = false;
   n.autoHideSeconds = 5;
@@ -1476,6 +1514,9 @@ void MainWindow::saveEditorToNote(bool refreshAfter) {
 
   const int imp = static_cast<int>(SendMessageW(m_comboImportance, CB_GETCURSEL, 0, 0));
   n.importance = std::clamp(imp, 0, 2);
+
+  const int cat = static_cast<int>(SendMessageW(m_comboCategory, CB_GETCURSEL, 0, 0));
+  n.category = std::clamp(cat, 0, 6);
 
   n.autoHideEnabled = (SendMessageW(m_chkAutoHide, BM_GETCHECK, 0, 0) == BST_CHECKED);
   n.autoHideSeconds = std::clamp(toIntOr(getControlText(m_editAutoHideSeconds), 5), 1, 3600);
@@ -2010,6 +2051,8 @@ void MainWindow::applyUiZoom() {
   SendMessageW(m_timePicker, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_lblImportance, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_comboImportance, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_lblCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_comboCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_chkAutoHide, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_editAutoHideSeconds, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnSave, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);

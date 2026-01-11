@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(AlertCalendar
-  VERSION 0.2.0
+  VERSION 0.3.0
   DESCRIPTION "Calendar with rich notes and reminders (Windows 10) - WinAPI build"
   LANGUAGES CXX
 )

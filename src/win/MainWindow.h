@@ -91,6 +91,8 @@ private:
   HWND m_editTitle{};
   HWND m_timePicker{};
   HWND m_comboImportance{};
+  HWND m_lblCategory{};
+  HWND m_comboCategory{};
   HWND m_chkAutoHide{};
   HWND m_editAutoHideSeconds{};
   HWND m_spinAutoHideSeconds{};

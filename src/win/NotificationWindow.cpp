@@ -19,8 +19,13 @@ constexpr int IDC_BTN_SNOOZE = 50002;
 
 constexpr int IDM_SNOOZE_5 = 50105;
 constexpr int IDM_SNOOZE_10 = 50110;
+constexpr int IDM_SNOOZE_15 = 50115;
 constexpr int IDM_SNOOZE_30 = 50130;
 constexpr int IDM_SNOOZE_60 = 50160;
+constexpr int IDM_SNOOZE_120 = 50220;
+constexpr int IDM_SNOOZE_240 = 50340;
+constexpr int IDM_SNOOZE_1DAY = 50500;
+constexpr int IDM_SNOOZE_1WEEK = 50600;
 
 void setDarkTitleBar(HWND hwnd) {
   // Optional: don't fail if not supported
@@ -164,11 +169,26 @@ LRESULT NotificationWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case IDM_SNOOZE_10:
           snoozeMinutes(10);
           return 0;
+        case IDM_SNOOZE_15:
+          snoozeMinutes(15);
+          return 0;
         case IDM_SNOOZE_30:
           snoozeMinutes(30);
           return 0;
         case IDM_SNOOZE_60:
           snoozeMinutes(60);
+          return 0;
+        case IDM_SNOOZE_120:
+          snoozeMinutes(120);
+          return 0;
+        case IDM_SNOOZE_240:
+          snoozeMinutes(240);
+          return 0;
+        case IDM_SNOOZE_1DAY:
+          snoozeMinutes(24 * 60);
+          return 0;
+        case IDM_SNOOZE_1WEEK:
+          snoozeMinutes(7 * 24 * 60);
           return 0;
         default:
           break;
@@ -348,10 +368,17 @@ void NotificationWindow::showSnoozeMenu() {
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
 
-  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_5, L"Отложить на 5 минут");
-  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_10, L"Отложить на 10 минут");
-  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_30, L"Отложить на 30 минут");
-  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_60, L"Отложить на 1 час");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_5, L"5 минут");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_10, L"10 минут");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_15, L"15 минут");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_30, L"30 минут");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_60, L"1 час");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_120, L"2 часа");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_240, L"4 часа");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_1DAY, L"1 день");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_1WEEK, L"1 неделя");
 
   RECT rcBtn{};
   GetWindowRect(m_btnSnooze, &rcBtn);

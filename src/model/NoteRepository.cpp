@@ -112,6 +112,7 @@ bool readMeta(const std::wstring& id, Note& out, std::wstring* errorOut) {
 
   out.scheduledAtUtcMs = getI64("scheduledAtUtcMs", 0);
   out.importance = getI("importance", 0);
+  out.category = getI("category", 0);
   out.contentMode = static_cast<NoteContentMode>(getI("contentMode", 0));
   out.autoHideEnabled = getI("autoHideEnabled", 0) != 0;
   out.autoHideSeconds = getI("autoHideSeconds", 0);
@@ -161,6 +162,7 @@ bool writeMeta(const Note& n, std::wstring* errorOut) {
   std::ostringstream ss;
   ss << "scheduledAtUtcMs=" << n.scheduledAtUtcMs << "\n";
   ss << "importance=" << n.importance << "\n";
+  ss << "category=" << n.category << "\n";
   ss << "contentMode=" << static_cast<int>(n.contentMode) << "\n";
   ss << "autoHideEnabled=" << (n.autoHideEnabled ? 1 : 0) << "\n";
   ss << "autoHideSeconds=" << n.autoHideSeconds << "\n";
