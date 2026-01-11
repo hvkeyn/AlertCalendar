@@ -611,7 +611,7 @@ void MainWindow::onCreate() {
   SendMessageW(m_comboCategory, CB_SETCURSEL, 0, 0);
 
   m_lblReminder = CreateWindowExW(
-    0, L"STATIC", L"Напомнить:",
+    0, L"STATIC", L"Напомнить за:",
     WS_CHILD | WS_VISIBLE | SS_LEFT,
     1130, 294, 80, 20,
     m_hwnd, nullptr, m_hInstance, nullptr
@@ -629,7 +629,7 @@ void MainWindow::onCreate() {
     nullptr
   );
   SetWindowTheme(m_comboReminder, L"Explorer", nullptr);
-  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"В начало"));
+  SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Время начала"));
   SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"5 мин"));
   SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"10 мин"));
   SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"15 мин"));
@@ -693,22 +693,13 @@ void MainWindow::onCreate() {
     m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_DELETE)), m_hInstance, nullptr
   );
 
-  m_chkPreview = CreateWindowExW(
-    0,
-    L"BUTTON",
-    L"Предпросмотр уведомления",
-    WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-    520, 366, 240, 24,
-    m_hwnd,
-    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CHK_PREVIEW)),
-    m_hInstance,
-    nullptr
-  );
+  // Preview checkbox removed - preview is always visible now
+  m_chkPreview = nullptr;
 
   m_btnPreviewPopup = CreateWindowExW(
     0,
     L"BUTTON",
-    L"Показать окно",
+    L"Превью",
     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
     520, 366, 120, 24,
     m_hwnd,
@@ -756,7 +747,7 @@ void MainWindow::onCreate() {
     WS_EX_CLIENTEDGE,
     MSFTEDIT_CLASS,
     L"",
-    WS_CHILD | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
+    WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
     520, 0, 0, 0,
     m_hwnd,
     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PREVIEW_RICH)),
@@ -906,6 +897,8 @@ void MainWindow::onCreate() {
     m_hInstance,
     nullptr
   );
+  // Keep editor in rich-text mode
+  SendMessageW(m_editorRich, EM_SETTEXTMODE, TM_RICHTEXT, 0);
 
   m_lblZoom = CreateWindowExW(
     0, L"STATIC", L"Масштаб: 100%",
@@ -941,7 +934,6 @@ void MainWindow::onCreate() {
   SendMessageW(m_editAutoHideSeconds, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnSave, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnDelete, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
-  SendMessageW(m_chkPreview, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnPreviewPopup, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_previewLabel, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_previewTitle, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontBold), TRUE);
@@ -1156,10 +1148,9 @@ void MainWindow::onSize(int width, int height) {
   MoveWindow(m_btnDelete, rightX + btnW + gap, y, delW, sx(32), TRUE);
   y += sx(32) + sx(6);
 
-  // Preview toggle
-  const int previewBtnW = sx(120);
-  MoveWindow(m_chkPreview, rightX, y, std::max(sx(140), rightW - previewBtnW - gap), sx(24), TRUE);
-  MoveWindow(m_btnPreviewPopup, rightX + rightW - previewBtnW, y, previewBtnW, sx(24), TRUE);
+  // Preview popup button (checkbox removed - preview always visible)
+  const int previewBtnW = sx(130);
+  MoveWindow(m_btnPreviewPopup, rightX, y, previewBtnW, sx(24), TRUE);
   y += sx(24) + sx(2);
 
   // Sound settings
@@ -1198,88 +1189,19 @@ void MainWindow::onSize(int width, int height) {
   MoveWindow(m_btnImage, rightX + (toolBtnW + sx(4)) * 4, y, sx(44), toolH, TRUE);
   y += toolH + sx(6);
 
-  const bool showPreview = (SendMessageW(m_chkPreview, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  // Editor takes full remaining height (inline preview removed)
   const int totalH = std::max(sx(120), height - y - margin);
-  if (!showPreview) {
-    MoveWindow(m_editorRich, rightX, y, rightW, totalH, TRUE);
-    ShowWindow(m_previewLabel, SW_HIDE);
-    ShowWindow(m_previewStripe, SW_HIDE);
-    ShowWindow(m_previewTitle, SW_HIDE);
-    ShowWindow(m_previewClose, SW_HIDE);
-    ShowWindow(m_previewSnooze, SW_HIDE);
-    ShowWindow(m_previewRich, SW_HIDE);
-    ShowWindow(m_previewProgress, SW_HIDE);
-    ShowWindow(m_previewCountdown, SW_HIDE);
-  } else {
-    const int gap2 = sx(8);
-    const int labelH2 = sx(18);
-    int editorH = std::max(sx(120), (totalH * 60) / 100);
-    int previewH = totalH - editorH - (labelH2 + gap2 * 2);
-    if (previewH < sx(120)) {
-      previewH = sx(120);
-      editorH = std::max(sx(80), totalH - (labelH2 + gap2 * 2) - previewH);
-    }
+  MoveWindow(m_editorRich, rightX, y, rightW, totalH, TRUE);
 
-    MoveWindow(m_editorRich, rightX, y, rightW, editorH, TRUE);
-    int py = y + editorH + gap2;
-    MoveWindow(m_previewLabel, rightX, py, rightW, labelH2, TRUE);
-    py += labelH2 + gap2;
-
-    // Notification mock layout (close to NotificationWindow)
-    const int stripeW = sx(6);
-    const int padIn = sx(12);
-    const int topPad = sx(8);
-    const int btnWClose = sx(90);
-    const int btnWSnooze = sx(110);
-    const int btnH2 = sx(28);
-    const int titleH2 = sx(22);
-
-    RECT card{};
-    card.left = rightX;
-    card.top = py;
-    card.right = rightX + rightW;
-    card.bottom = py + previewH;
-
-    MoveWindow(m_previewStripe, card.left, card.top, stripeW, previewH, TRUE);
-
-    const int contentX = card.left + stripeW + padIn;
-    const int contentW = std::max(sx(120), rightW - stripeW - padIn * 2);
-
-    const int closeX = card.right - padIn - btnWClose;
-    const int snoozeX = closeX - sx(8) - btnWSnooze;
-    MoveWindow(m_previewClose, closeX, card.top + topPad, btnWClose, btnH2, TRUE);
-    MoveWindow(m_previewSnooze, snoozeX, card.top + topPad, btnWSnooze, btnH2, TRUE);
-    MoveWindow(m_previewTitle, contentX, card.top + topPad + sx(2), std::max(sx(80), contentW - btnWClose - btnWSnooze - sx(18)), titleH2, TRUE);
-
-    const int richTop = card.top + topPad + btnH2 + sx(8);
-    const int bottomPad = padIn;
-    const bool autoHide = (SendMessageW(m_chkAutoHide, BM_GETCHECK, 0, 0) == BST_CHECKED);
-    const int progH = autoHide ? sx(12) : 0;
-    const int countH = autoHide ? sx(18) : 0;
-    const int gapP = autoHide ? sx(8) : 0;
-    int richH = (card.bottom - richTop) - bottomPad - progH - countH - gapP;
-    richH = std::max(sx(60), richH);
-
-    MoveWindow(m_previewRich, contentX, richTop, contentW, richH, TRUE);
-
-    if (autoHide) {
-      const int progY = richTop + richH + sx(8);
-      MoveWindow(m_previewProgress, contentX, progY, contentW, progH, TRUE);
-      MoveWindow(m_previewCountdown, contentX, progY + progH + sx(4), contentW, countH, TRUE);
-      ShowWindow(m_previewProgress, SW_SHOW);
-      ShowWindow(m_previewCountdown, SW_SHOW);
-    } else {
-      ShowWindow(m_previewProgress, SW_HIDE);
-      ShowWindow(m_previewCountdown, SW_HIDE);
-    }
-
-    ShowWindow(m_previewLabel, SW_SHOW);
-    ShowWindow(m_previewStripe, SW_SHOW);
-    ShowWindow(m_previewTitle, SW_SHOW);
-    ShowWindow(m_previewClose, SW_SHOW);
-    ShowWindow(m_previewSnooze, SW_SHOW);
-    ShowWindow(m_previewRich, SW_SHOW);
-  }
+  // Hide inline preview elements (removed from UI)
+  ShowWindow(m_previewLabel, SW_HIDE);
+  ShowWindow(m_previewStripe, SW_HIDE);
+  ShowWindow(m_previewTitle, SW_HIDE);
+  ShowWindow(m_previewClose, SW_HIDE);
+  ShowWindow(m_previewSnooze, SW_HIDE);
+  ShowWindow(m_previewRich, SW_HIDE);
+  ShowWindow(m_previewProgress, SW_HIDE);
+  ShowWindow(m_previewCountdown, SW_HIDE);
 
   // Comfortable inner padding (more iPad-like, easier to read)
   const int pad = sx(10);
@@ -1326,22 +1248,14 @@ void MainWindow::onCommand(int id) {
     case IDC_BTN_IMAGE:
       insertImageIntoRich();
       return;
-    case IDC_CHK_AUTOHIDE:
+    case IDC_CHK_AUTOHIDE: {
       updateAutoHideEnabled();
       markEditorDirty();
       updateNotificationPreview();
-      if (SendMessageW(m_chkPreview, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-        RECT rc{};
-        GetClientRect(m_hwnd, &rc);
-        onSize(rc.right - rc.left, rc.bottom - rc.top);
-      }
-      return;
-    case IDC_CHK_PREVIEW: {
-      // Toggle preview visibility
+      // Force layout update for preview
       RECT rc{};
       GetClientRect(m_hwnd, &rc);
       onSize(rc.right - rc.left, rc.bottom - rc.top);
-      updateNotificationPreview();
       return;
     }
     case IDC_BTN_PREVIEW_POPUP:
@@ -1528,7 +1442,7 @@ void MainWindow::clearEditor() {
   SendMessageW(m_timePicker, DTM_SETSYSTEMTIME, GDT_VALID, reinterpret_cast<LPARAM>(&day));
 
   // Clear content (single editor)
-  RichEditUtil::setRtf(m_editorRich, L"{\\rtf1\\ansi\\deff0\\fs24 }");
+  RichEditUtil::setRtfW(m_editorRich, L"{\\rtf1\\ansi\\deff0\\fs24 }");
 
   m_editorDirty = false;
   m_loadingEditor = false;
@@ -1552,13 +1466,13 @@ void MainWindow::loadNoteToEditor(const Note& note) {
 
   // Load content into WYSIWYG editor.
   if (!note.contentRtf.empty()) {
-    RichEditUtil::setRtf(m_editorRich, note.contentRtf);
+    RichEditUtil::setRtfBytes(m_editorRich, note.contentRtf);
   } else if (!note.contentMarkdown.empty()) {
-    RichEditUtil::setRtf(m_editorRich, MarkupConvert::markdownToRtf(note.contentMarkdown));
+    RichEditUtil::setRtfW(m_editorRich, MarkupConvert::markdownToRtf(note.contentMarkdown));
   } else if (!note.contentHtml.empty()) {
-    RichEditUtil::setRtf(m_editorRich, MarkupConvert::htmlToRtf(note.contentHtml));
+    RichEditUtil::setRtfW(m_editorRich, MarkupConvert::htmlToRtf(note.contentHtml));
   } else {
-    RichEditUtil::setRtf(m_editorRich, L"{\\rtf1\\ansi\\deff0\\fs24 }");
+    RichEditUtil::setRtfW(m_editorRich, L"{\\rtf1\\ansi\\deff0\\fs24 }");
   }
 
   m_loadingEditor = false;
@@ -1572,7 +1486,7 @@ void MainWindow::addNewNote() {
   n.title = L"";
   n.importance = 0;
   n.contentMode = NoteContentMode::VisualRtf;
-  n.contentRtf = L"{\\rtf1\\ansi\\deff0\\fs24 }";
+  n.contentRtf = "{\\rtf1\\ansi\\deff0\\fs24 }";
 
   // Default time: +1 hour from now (so reminder doesn't fire immediately)
   const int64_t nowMs = TimeUtils::unixMsNowUtc();
@@ -1634,7 +1548,7 @@ void MainWindow::saveEditorToNote(bool refreshAfter) {
 
   // Single WYSIWYG editor: always store RTF.
   n.contentMode = NoteContentMode::VisualRtf;
-  n.contentRtf = RichEditUtil::getRtf(m_editorRich);
+  n.contentRtf = RichEditUtil::getRtfBytes(m_editorRich);
 
   // If scheduled time changed, we should refresh list to keep ordering correct.
   if (m_currentNote && prevScheduled != 0 && prevScheduled != n.scheduledAtUtcMs) {
@@ -1942,7 +1856,7 @@ void MainWindow::showNotificationPreviewPopup() {
   n.title = getControlText(m_editTitle);
   n.importance = std::clamp(static_cast<int>(SendMessageW(m_comboImportance, CB_GETCURSEL, 0, 0)), 0, 2);
   n.contentMode = NoteContentMode::VisualRtf;
-  n.contentRtf = RichEditUtil::getRtf(m_editorRich);
+  n.contentRtf = RichEditUtil::getRtfBytes(m_editorRich);
   n.autoHideEnabled = (SendMessageW(m_chkAutoHide, BM_GETCHECK, 0, 0) == BST_CHECKED);
   n.autoHideSeconds = std::clamp(toIntOr(getControlText(m_editAutoHideSeconds), 5), 1, 3600);
   n.scheduledAtUtcMs = TimeUtils::unixMsNowUtc();
@@ -1950,7 +1864,7 @@ void MainWindow::showNotificationPreviewPopup() {
   // Optional: play sound like a real reminder.
   playSoundForImportance(n.importance, false);
 
-  auto* w = new NotificationWindow(m_hInstance, n, /*previewOnly*/ true);
+  auto* w = new NotificationWindow(m_hInstance, n, /*previewOnly*/ true, m_editorRich);
   w->show();
 }
 
@@ -1993,7 +1907,11 @@ void MainWindow::insertImageIntoRich() {
   }
 
   SetFocus(m_editorRich);
-  RichEditUtil::insertRtfAtSelection(m_editorRich, rtf);
+  // Convert generated RTF (wstring) to bytes (ASCII-safe; ImageRtf produces ASCII/hex)
+  std::string rtfBytes;
+  rtfBytes.reserve(rtf.size());
+  for (wchar_t wc : rtf) rtfBytes.push_back(static_cast<char>(wc & 0xFF));
+  RichEditUtil::insertRtfAtSelectionBytes(m_editorRich, rtfBytes);
   markEditorDirty();
 }
 
@@ -2153,7 +2071,6 @@ void MainWindow::applyUiZoom() {
   SendMessageW(m_editAutoHideSeconds, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnSave, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnDelete, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
-  SendMessageW(m_chkPreview, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnPreviewPopup, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_previewLabel, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_previewTitle, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontBold), TRUE);
@@ -2218,9 +2135,8 @@ void MainWindow::applyUiTheme() {
 }
 
 void MainWindow::updateNotificationPreview() {
-  if (!m_previewRich || !m_chkPreview) return;
-  const bool showPreview = (SendMessageW(m_chkPreview, BM_GETCHECK, 0, 0) == BST_CHECKED);
-  if (!showPreview) return;
+  if (!m_previewRich) return;
+  // Preview is always visible now (checkbox removed)
 
   // Importance stripe color
   int imp = static_cast<int>(SendMessageW(m_comboImportance, CB_GETCURSEL, 0, 0));
@@ -2261,9 +2177,9 @@ void MainWindow::updateNotificationPreview() {
   SetWindowTextW(m_previewTitle, title.c_str());
 
   // Show exactly what will be used in the notification window: current RTF from the editor.
-  const std::wstring rtf = RichEditUtil::getRtf(m_editorRich);
+  const std::string rtf = RichEditUtil::getRtfBytes(m_editorRich);
   if (!rtf.empty()) {
-    RichEditUtil::setRtf(m_previewRich, rtf);
+    RichEditUtil::setRtfBytes(m_previewRich, rtf);
   } else {
     SetWindowTextW(m_previewRich, L"");
   }

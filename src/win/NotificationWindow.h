@@ -5,9 +5,14 @@
 
 #include <windows.h>
 
+// Forward declare (defined in <richole.h>)
+struct IRichEditOleCallback;
+
 class NotificationWindow {
 public:
-  NotificationWindow(HINSTANCE hInstance, Note note, bool previewOnly = false);
+  // If previewOnly==true and sourceRichForPreview is provided, content is copied directly
+  // from the source RichEdit to preserve embedded images/objects.
+  NotificationWindow(HINSTANCE hInstance, Note note, bool previewOnly = false, HWND sourceRichForPreview = nullptr);
   void show();
 
 private:
@@ -27,6 +32,7 @@ private:
 
   HINSTANCE m_hInstance{};
   Note m_note;
+  HWND m_sourceRichForPreview{};
 
   HWND m_hwnd{};
   HWND m_lblTitle{};
@@ -38,6 +44,8 @@ private:
 
   HFONT m_font{};
   HFONT m_fontTitle{};
+
+  IRichEditOleCallback* m_oleCb{}; // owned, released in onDestroy
 
   UINT_PTR m_timerId{};
   int m_totalMs = 0;

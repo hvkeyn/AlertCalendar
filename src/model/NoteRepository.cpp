@@ -49,6 +49,14 @@ bool readFileUtf8(const fs::path& p, std::wstring* out, std::wstring* errorOut) 
   return true;
 }
 
+bool readFileBinary(const fs::path& p, std::string* out) {
+  out->clear();
+  std::ifstream f(p, std::ios::binary);
+  if (!f.is_open()) return false;
+  *out = std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  return true;
+}
+
 bool writeFileUtf8(const fs::path& p, const std::wstring& text, std::wstring* errorOut) {
   std::ofstream f(p, std::ios::binary | std::ios::trunc);
   if (!f.is_open()) {
@@ -58,6 +66,18 @@ bool writeFileUtf8(const fs::path& p, const std::wstring& text, std::wstring* er
     return false;
   }
   const std::string data = WinUtil::toUtf8(text);
+  f.write(data.data(), static_cast<std::streamsize>(data.size()));
+  return true;
+}
+
+bool writeFileBinary(const fs::path& p, const std::string& data, std::wstring* errorOut) {
+  std::ofstream f(p, std::ios::binary | std::ios::trunc);
+  if (!f.is_open()) {
+    if (errorOut) {
+      *errorOut = L"Не удалось открыть файл для записи: " + p.wstring();
+    }
+    return false;
+  }
   f.write(data.data(), static_cast<std::streamsize>(data.size()));
   return true;
 }
@@ -135,8 +155,8 @@ bool readMeta(const std::wstring& id, Note& out, std::wstring* errorOut) {
 
   // content (optional)
   {
-    std::wstring rtf;
-    if (readFileUtf8(contentRtfPath(id), &rtf, nullptr)) {
+    std::string rtf;
+    if (readFileBinary(contentRtfPath(id), &rtf)) {
       out.contentRtf = rtf;
     }
     std::wstring html;
@@ -185,7 +205,7 @@ bool writeMeta(const Note& n, std::wstring* errorOut) {
 
   // content files: сохраняем то, что передано
   // Important: if content becomes empty, we must clear old files, otherwise "old text comes back".
-  auto writeOrDelete = [&](const fs::path& p, const std::wstring& text) -> bool {
+  auto writeOrDeleteUtf8 = [&](const fs::path& p, const std::wstring& text) -> bool {
     if (text.empty()) {
       std::error_code ec;
       fs::remove(p, ec);
@@ -194,9 +214,16 @@ bool writeMeta(const Note& n, std::wstring* errorOut) {
     return writeFileUtf8(p, text, errorOut);
   };
 
-  if (!writeOrDelete(dir / L"content.rtf", n.contentRtf)) return false;
-  if (!writeOrDelete(dir / L"content.html", n.contentHtml)) return false;
-  if (!writeOrDelete(dir / L"content.md", n.contentMarkdown)) return false;
+  // RTF is binary-safe (can contain \bin)
+  if (n.contentRtf.empty()) {
+    std::error_code ec;
+    fs::remove(dir / L"content.rtf", ec);
+  } else {
+    if (!writeFileBinary(dir / L"content.rtf", n.contentRtf, errorOut)) return false;
+  }
+
+  if (!writeOrDeleteUtf8(dir / L"content.html", n.contentHtml)) return false;
+  if (!writeOrDeleteUtf8(dir / L"content.md", n.contentMarkdown)) return false;
 
   return true;
 }

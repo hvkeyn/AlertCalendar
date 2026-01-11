@@ -5,6 +5,12 @@
 
 #include <algorithm>
 #include <vector>
+#include <string>
+
+// Some SDKs don't expose this flag, but RichEdit supports it for streaming embedded objects.
+#ifndef SFF_PERSISTVIEWS
+#define SFF_PERSISTVIEWS 0x00002000
+#endif
 
 namespace {
 struct InCookie {
@@ -34,6 +40,33 @@ DWORD CALLBACK streamInCallback(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LONG
   return 0;
 }
 
+// Byte version for RTF with binary/hex data (images)
+struct InCookieAnsi {
+  const char* data = nullptr;
+  size_t len = 0;
+  size_t pos = 0;
+};
+
+DWORD CALLBACK streamInCallbackAnsi(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LONG* pcb) {
+  auto* c = reinterpret_cast<InCookieAnsi*>(dwCookie);
+  if (!c || !c->data || cb <= 0) {
+    *pcb = 0;
+    return 0;
+  }
+
+  const size_t bytesLeft = c->len - c->pos;
+  const size_t toCopy = std::min(static_cast<size_t>(cb), bytesLeft);
+  if (toCopy == 0) {
+    *pcb = 0;
+    return 0;
+  }
+
+  std::copy_n(c->data + c->pos, toCopy, pbBuff);
+  c->pos += toCopy;
+  *pcb = static_cast<LONG>(toCopy);
+  return 0;
+}
+
 struct OutCookie {
   std::wstring out;
 };
@@ -49,6 +82,24 @@ DWORD CALLBACK streamOutCallback(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LON
   const size_t chars = static_cast<size_t>(cb) / sizeof(wchar_t);
   const wchar_t* ws = reinterpret_cast<const wchar_t*>(pbBuff);
   c->out.append(ws, ws + chars);
+  *pcb = cb;
+  return 0;
+}
+
+// ANSI version for RTF export (preserves image hex data correctly)
+struct OutCookieAnsi {
+  std::string out;
+};
+
+DWORD CALLBACK streamOutCallbackAnsi(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LONG* pcb) {
+  auto* c = reinterpret_cast<OutCookieAnsi*>(dwCookie);
+  if (!c || !pbBuff || cb <= 0) {
+    *pcb = 0;
+    return 0;
+  }
+
+  const char* data = reinterpret_cast<const char*>(pbBuff);
+  c->out.append(data, static_cast<size_t>(cb));
   *pcb = cb;
   return 0;
 }
@@ -82,8 +133,26 @@ bool RichEditUtil::ensureLoaded() {
   return loaded;
 }
 
-bool RichEditUtil::setRtf(HWND hwndRichEdit, const std::wstring& rtf) {
+bool RichEditUtil::setRtfBytes(HWND hwndRichEdit, const std::string& rtf) {
   if (!hwndRichEdit) return false;
+  if (rtf.empty()) return true;
+
+  InCookieAnsi cookie;
+  cookie.data = rtf.data();
+  cookie.len = rtf.size();
+  cookie.pos = 0;
+
+  EDITSTREAM es{};
+  es.dwCookie = reinterpret_cast<DWORD_PTR>(&cookie);
+  es.pfnCallback = streamInCallbackAnsi;
+
+  const LRESULT res = SendMessageW(hwndRichEdit, EM_STREAMIN, SF_RTF, reinterpret_cast<LPARAM>(&es));
+  return res == 0;
+}
+
+bool RichEditUtil::setRtfW(HWND hwndRichEdit, const std::wstring& rtf) {
+  if (!hwndRichEdit) return false;
+  if (rtf.empty()) return true;
   InCookie cookie;
   cookie.data = rtf.c_str();
   cookie.lenChars = rtf.size();
@@ -93,35 +162,37 @@ bool RichEditUtil::setRtf(HWND hwndRichEdit, const std::wstring& rtf) {
   es.dwCookie = reinterpret_cast<DWORD_PTR>(&cookie);
   es.pfnCallback = streamInCallback;
 
-  // SF_UNICODE means the stream callback supplies UTF-16LE.
   const LRESULT res = SendMessageW(hwndRichEdit, EM_STREAMIN, SF_RTF | SF_UNICODE, reinterpret_cast<LPARAM>(&es));
   return res == 0;
 }
 
-bool RichEditUtil::insertRtfAtSelection(HWND hwndRichEdit, const std::wstring& rtf) {
+bool RichEditUtil::insertRtfAtSelectionBytes(HWND hwndRichEdit, const std::string& rtf) {
   if (!hwndRichEdit) return false;
-  InCookie cookie;
-  cookie.data = rtf.c_str();
-  cookie.lenChars = rtf.size();
-  cookie.posChars = 0;
+  if (rtf.empty()) return true;
+
+  InCookieAnsi cookie;
+  cookie.data = rtf.data();
+  cookie.len = rtf.size();
+  cookie.pos = 0;
 
   EDITSTREAM es{};
   es.dwCookie = reinterpret_cast<DWORD_PTR>(&cookie);
-  es.pfnCallback = streamInCallback;
+  es.pfnCallback = streamInCallbackAnsi;
 
-  const LRESULT res = SendMessageW(hwndRichEdit, EM_STREAMIN, SF_RTF | SF_UNICODE | SFF_SELECTION, reinterpret_cast<LPARAM>(&es));
+  const LRESULT res = SendMessageW(hwndRichEdit, EM_STREAMIN, SF_RTF | SFF_SELECTION, reinterpret_cast<LPARAM>(&es));
   return res == 0;
 }
 
-std::wstring RichEditUtil::getRtf(HWND hwndRichEdit) {
+std::string RichEditUtil::getRtfBytes(HWND hwndRichEdit) {
   if (!hwndRichEdit) return {};
-  OutCookie cookie;
+  OutCookieAnsi cookie;
 
   EDITSTREAM es{};
   es.dwCookie = reinterpret_cast<DWORD_PTR>(&cookie);
-  es.pfnCallback = streamOutCallback;
+  es.pfnCallback = streamOutCallbackAnsi;
 
-  SendMessageW(hwndRichEdit, EM_STREAMOUT, SF_RTF | SF_UNICODE, reinterpret_cast<LPARAM>(&es));
+  // SFF_PERSISTVIEWS is important to preserve embedded objects/images when streaming out.
+  SendMessageW(hwndRichEdit, EM_STREAMOUT, SF_RTF | SFF_PERSISTVIEWS, reinterpret_cast<LPARAM>(&es));
   return cookie.out;
 }
 

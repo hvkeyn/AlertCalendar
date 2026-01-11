@@ -4,10 +4,12 @@
 #include "model/NoteRepository.h"
 #include "settings/AppSettings.h"
 #include "win/RichEditUtil.h"
+#include "win/RichEditOleCallback.h"
 #include "win/MarkupConvert.h"
 #include "win/WinUtil.h"
 
 #include <commctrl.h>
+#include <ole2.h>
 #include <richedit.h>
 
 namespace {
@@ -42,10 +44,40 @@ void setDarkTitleBar(HWND hwnd) {
   fn(hwnd, 20, &on, sizeof(on));
   FreeLibrary(dwm);
 }
+
+bool copyRichContentPreserveClipboard(HWND srcRich, HWND dstRich) {
+  if (!srcRich || !dstRich) return false;
+
+  // Preserve clipboard contents
+  IDataObject* oldClip = nullptr;
+  OleGetClipboard(&oldClip); // may return nullptr, ok
+
+  // Copy all from source
+  SendMessageW(srcRich, EM_SETSEL, 0, -1);
+  SendMessageW(srcRich, WM_COPY, 0, 0);
+
+  // Paste into destination (temporarily disable read-only)
+  const LRESULT wasRO = SendMessageW(dstRich, EM_GETOPTIONS, 0, 0);
+  SendMessageW(dstRich, EM_SETREADONLY, FALSE, 0);
+  SendMessageW(dstRich, EM_SETSEL, 0, -1);
+  SendMessageW(dstRich, WM_PASTE, 0, 0);
+  SendMessageW(dstRich, EM_SETREADONLY, TRUE, 0);
+  (void)wasRO;
+
+  // Restore clipboard
+  if (oldClip) {
+    OleSetClipboard(oldClip);
+    oldClip->Release();
+  }
+  return true;
+}
 } // namespace
 
-NotificationWindow::NotificationWindow(HINSTANCE hInstance, Note note, bool previewOnly)
-  : m_hInstance(hInstance), m_note(std::move(note)), m_previewOnly(previewOnly) {}
+NotificationWindow::NotificationWindow(HINSTANCE hInstance, Note note, bool previewOnly, HWND sourceRichForPreview)
+  : m_hInstance(hInstance)
+  , m_note(std::move(note))
+  , m_sourceRichForPreview(sourceRichForPreview)
+  , m_previewOnly(previewOnly) {}
 
 void NotificationWindow::show() {
   const wchar_t* kClassName = L"AlertCalendarNotificationWindow";
@@ -279,6 +311,13 @@ void NotificationWindow::onCreate() {
     m_hInstance,
     nullptr
   );
+  // Ensure RichEdit is in rich-text mode (otherwise RTF loads as plain text -> no bold/images)
+  SendMessageW(m_rich, EM_SETTEXTMODE, TM_RICHTEXT, 0);
+  // Important: set font BEFORE streaming in RTF. Setting WM_SETFONT after can wipe formatting.
+  SendMessageW(m_rich, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
+  // Allow RichEdit to load embedded OLE objects/images from RTF (e.g. \objdata)
+  m_oleCb = new RichEditOleCallback();
+  SendMessageW(m_rich, EM_SETOLECALLBACK, 0, reinterpret_cast<LPARAM>(m_oleCb));
   SendMessageW(m_rich, EM_SETBKGNDCOLOR, 0, static_cast<LPARAM>(m_theme.editorBg));
 
   // Set default text color for RichEdit
@@ -289,14 +328,17 @@ void NotificationWindow::onCreate() {
   SendMessageW(m_rich, EM_SETCHARFORMAT, SCF_ALL, reinterpret_cast<LPARAM>(&cf));
 
   // Show content
-  if (m_note.contentMode == NoteContentMode::VisualRtf && !m_note.contentRtf.empty()) {
-    RichEditUtil::setRtf(m_rich, m_note.contentRtf);
+  if (m_previewOnly && m_sourceRichForPreview) {
+    // Copy directly from the live editor to preserve embedded images/objects.
+    copyRichContentPreserveClipboard(m_sourceRichForPreview, m_rich);
+  } else if (m_note.contentMode == NoteContentMode::VisualRtf && !m_note.contentRtf.empty()) {
+    RichEditUtil::setRtfBytes(m_rich, m_note.contentRtf);
   } else if (m_note.contentMode == NoteContentMode::Markdown && !m_note.contentMarkdown.empty()) {
-    RichEditUtil::setRtf(m_rich, MarkupConvert::markdownToRtf(m_note.contentMarkdown));
+    RichEditUtil::setRtfW(m_rich, MarkupConvert::markdownToRtf(m_note.contentMarkdown));
   } else if (m_note.contentMode == NoteContentMode::Html && !m_note.contentHtml.empty()) {
-    RichEditUtil::setRtf(m_rich, MarkupConvert::htmlToRtf(m_note.contentHtml));
+    RichEditUtil::setRtfW(m_rich, MarkupConvert::htmlToRtf(m_note.contentHtml));
   } else {
-    RichEditUtil::setRtf(m_rich, L"{\\rtf1\\ansi\\deff0\\fs22 }");
+    RichEditUtil::setRtfW(m_rich, L"{\\rtf1\\ansi\\deff0\\fs22 }");
   }
 
   m_progress = CreateWindowExW(
@@ -324,7 +366,6 @@ void NotificationWindow::onCreate() {
   SendMessageW(m_lblTitle, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontTitle), TRUE);
   SendMessageW(m_btnClose, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnSnooze, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
-  SendMessageW(m_rich, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_lblCountdown, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
 
   if (m_note.autoHideEnabled && m_note.autoHideSeconds > 0) {
@@ -348,6 +389,10 @@ void NotificationWindow::onDestroy() {
   if (m_fontTitle) {
     DeleteObject(m_fontTitle);
     m_fontTitle = nullptr;
+  }
+  if (m_oleCb) {
+    m_oleCb->Release();
+    m_oleCb = nullptr;
   }
 }
 
@@ -493,8 +538,8 @@ void NotificationWindow::positionBottomRight() {
   auto sx = [&](int px) { return MulDiv(px, zoom, 100); };
 
   // Centered notification (as requested). Size scales with UI zoom.
-  const int w = sx(560);
-  const int h = sx(380);
+  const int w = sx(640);
+  const int h = sx(480);
   const int cx = rc.left + ((rc.right - rc.left) - w) / 2;
   const int cy = rc.top + ((rc.bottom - rc.top) - h) / 2;
 

@@ -19,7 +19,8 @@ struct Note {
   int category = 0;   // 0=нет, 1=жёлтая, 2=зелёная, 3=красная, 4=лиловая, 5=оранжевая, 6=синяя
 
   NoteContentMode contentMode = NoteContentMode::VisualRtf;
-  std::wstring contentRtf;
+  // RTF is stored as raw bytes (can include binary blocks like \bin for images).
+  std::string contentRtf;
   std::wstring contentHtml;
   std::wstring contentMarkdown;
 

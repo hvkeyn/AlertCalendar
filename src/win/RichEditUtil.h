@@ -7,12 +7,15 @@ namespace RichEditUtil {
 // Loads msftedit.dll (RichEdit 5.0). Safe to call multiple times.
 bool ensureLoaded();
 
-// Set/Read RTF using EM_STREAMIN/EM_STREAMOUT in Unicode mode.
-bool setRtf(HWND hwndRichEdit, const std::wstring& rtf);
-std::wstring getRtf(HWND hwndRichEdit);
+// Set/Read RTF as raw bytes (binary-safe: images can use \bin blocks).
+bool setRtfBytes(HWND hwndRichEdit, const std::string& rtf);
+std::string getRtfBytes(HWND hwndRichEdit);
+
+// Convenience: Unicode RTF (for generated RTF from Markdown/HTML converters).
+bool setRtfW(HWND hwndRichEdit, const std::wstring& rtf);
 
 // Insert RTF at current selection (replaces selection).
-bool insertRtfAtSelection(HWND hwndRichEdit, const std::wstring& rtf);
+bool insertRtfAtSelectionBytes(HWND hwndRichEdit, const std::string& rtf);
 
 // Formatting helpers (WYSIWYG)
 void toggleBold(HWND hwndRichEdit);
