@@ -235,7 +235,17 @@ void NotificationWindow::onCreate() {
   m_fontTitle = CreateFontIndirectW(&lf);
 
   // Title label (keep simple and readable)
+  // Format: "Название  дата в время"
   std::wstring titleText = m_note.title.empty() ? L"(без названия)" : m_note.title;
+
+  // Add event start date/time if available
+  if (m_note.scheduledAtUtcMs > 0) {
+    SYSTEMTIME st = TimeUtils::unixMsToSystemTimeLocal(m_note.scheduledAtUtcMs);
+    wchar_t dtBuf[64]{};
+    swprintf_s(dtBuf, L"  %02d.%02d.%04d в %02d:%02d",
+               st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);
+    titleText += dtBuf;
+  }
 
   m_lblTitle = CreateWindowExW(
     0, L"STATIC", titleText.c_str(),

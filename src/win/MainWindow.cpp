@@ -2241,8 +2241,24 @@ void MainWindow::updateNotificationPreview() {
     }
   }
 
-  const std::wstring title = getControlText(m_editTitle);
-  SetWindowTextW(m_previewTitle, title.empty() ? L"(без названия)" : title.c_str());
+  std::wstring title = getControlText(m_editTitle);
+  if (title.empty()) title = L"(без названия)";
+
+  // Add event start date/time to title (like in NotificationWindow)
+  SYSTEMTIME t{};
+  const LRESULT gdt = SendMessageW(m_timePicker, DTM_GETSYSTEMTIME, 0, reinterpret_cast<LPARAM>(&t));
+  if (gdt == GDT_VALID) {
+    SYSTEMTIME day = selectedDateLocal();
+    day.wHour = t.wHour;
+    day.wMinute = t.wMinute;
+    day.wSecond = 0;
+    day.wMilliseconds = 0;
+    wchar_t dtBuf[64]{};
+    swprintf_s(dtBuf, L"  %02d.%02d.%04d в %02d:%02d",
+               day.wDay, day.wMonth, day.wYear, day.wHour, day.wMinute);
+    title += dtBuf;
+  }
+  SetWindowTextW(m_previewTitle, title.c_str());
 
   // Show exactly what will be used in the notification window: current RTF from the editor.
   const std::wstring rtf = RichEditUtil::getRtf(m_editorRich);
