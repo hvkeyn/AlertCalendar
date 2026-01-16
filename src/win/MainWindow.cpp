@@ -10,6 +10,7 @@
 #include "win/ImageRtf.h"
 #include "win/MarkupConvert.h"
 #include "win/UiTheme.h"
+#include "win/AppIcon.h"
 #include "app/AppPaths.h"
 
 #include <commctrl.h>
@@ -61,6 +62,15 @@ constexpr int IDC_BTN_TEST_SOUND = 1125;
 constexpr int IDC_BTN_PREVIEW_POPUP = 1126;
 constexpr int IDC_COMBO_CATEGORY = 1127;
 constexpr int IDC_COMBO_REMINDER = 1128;
+constexpr int IDC_COMBO_REPEAT = 1129;
+constexpr int IDC_BTN_CLOSE_EDITOR = 1137;
+constexpr int IDC_REPEAT_MON = 1130;
+constexpr int IDC_REPEAT_TUE = 1131;
+constexpr int IDC_REPEAT_WED = 1132;
+constexpr int IDC_REPEAT_THU = 1133;
+constexpr int IDC_REPEAT_FRI = 1134;
+constexpr int IDC_REPEAT_SAT = 1135;
+constexpr int IDC_REPEAT_SUN = 1136;
 
 constexpr UINT WM_APP_TRAY = WM_APP + 1;
 
@@ -74,6 +84,11 @@ constexpr int ID_TRAY_THEME_MINIMAL = 40007;
 
 constexpr UINT_PTR TIMER_AUTOSAVE = 2;
 constexpr int AUTOSAVE_DELAY_MS = 800;
+
+constexpr int BTN_STYLE_PRIMARY = 1;
+constexpr int BTN_STYLE_NEUTRAL = 2;
+constexpr int BTN_STYLE_DANGER = 3;
+constexpr int BTN_STYLE_GHOST = 4;
 
 // Reminder combo index <-> minutes conversion
 // 0=В начало(0), 1=5мин, 2=10мин, 3=15мин, 4=30мин, 5=1час(60), 6=2часа(120), 7=4часа(240), 8=1день(1440), 9=1неделя(10080)
@@ -104,6 +119,50 @@ int reminderMinutesToComboIndex(int minutes) {
   if (minutes <= 240) return 7;
   if (minutes <= 1440) return 8;
   return 9;
+}
+
+COLORREF blendColor(COLORREF base, COLORREF mix, int alpha) {
+  const int inv = 255 - alpha;
+  const int r = (GetRValue(base) * inv + GetRValue(mix) * alpha) / 255;
+  const int g = (GetGValue(base) * inv + GetGValue(mix) * alpha) / 255;
+  const int b = (GetBValue(base) * inv + GetBValue(mix) * alpha) / 255;
+  return RGB(r, g, b);
+}
+
+COLORREF importanceColor(int importance, const UiTheme& theme) {
+  if (importance >= 2) return theme.badgeUrgent;
+  if (importance == 1) return theme.badgeImportant;
+  return theme.badgeNormal;
+}
+
+void drawImportanceIcon(HDC hdc, const RECT& rc, int importance, const UiTheme& theme, bool selected) {
+  const int w = rc.right - rc.left;
+  const int h = rc.bottom - rc.top;
+  const int radius = std::max(3, std::min(w, h) / 4);
+  const int cx = rc.left + w / 2;
+  const int cy = rc.top + h / 2;
+  const COLORREF col = importanceColor(importance, theme);
+
+  HBRUSH bg = CreateSolidBrush(selected ? GetSysColor(COLOR_HIGHLIGHT) : theme.panelBg);
+  FillRect(hdc, &rc, bg);
+  DeleteObject(bg);
+
+  HBRUSH b = CreateSolidBrush(col);
+  HPEN p = CreatePen(PS_SOLID, 1, col);
+  HGDIOBJ oldB = SelectObject(hdc, b);
+  HGDIOBJ oldP = SelectObject(hdc, p);
+  Ellipse(hdc, cx - radius, cy - radius, cx + radius, cy + radius);
+  SelectObject(hdc, oldB);
+  SelectObject(hdc, oldP);
+  DeleteObject(b);
+  DeleteObject(p);
+
+  if (importance >= 1) {
+    RECT t = rc;
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    DrawTextW(hdc, L"!", 1, &t, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+  }
 }
 
 void listViewInitColumns(HWND list) {
@@ -157,6 +216,34 @@ int toIntOr(const std::wstring& s, int def) {
     return std::stoi(s);
   } catch (...) {
     return def;
+  }
+}
+
+SYSTEMTIME normalizeLocalDate(SYSTEMTIME d) {
+  d.wHour = 0;
+  d.wMinute = 0;
+  d.wSecond = 0;
+  d.wMilliseconds = 0;
+  FILETIME ft{};
+  if (SystemTimeToFileTime(&d, &ft)) {
+    SYSTEMTIME out{};
+    if (FileTimeToSystemTime(&ft, &out)) {
+      return out;
+    }
+  }
+  return d;
+}
+
+int weekdayMaskFromWDayOfWeek(WORD dow) {
+  switch (dow) {
+    case 1: return kRepeatDayMon;
+    case 2: return kRepeatDayTue;
+    case 3: return kRepeatDayWed;
+    case 4: return kRepeatDayThu;
+    case 5: return kRepeatDayFri;
+    case 6: return kRepeatDaySat;
+    case 0: return kRepeatDaySun;
+    default: return 0;
   }
 }
 
@@ -340,6 +427,98 @@ LRESULT MainWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_COMMAND:
       // CalendarView sends WM_COMMAND with IDC_CALENDAR on selection/month change
       if (LOWORD(wParam) == IDC_CALENDAR) {
+        const int code = HIWORD(wParam);
+        if (code == static_cast<int>(CalendarNotify::OpenDay)) {
+          if (m_calendarView) {
+            m_calendarView->setMode(CalendarViewMode::Day);
+          }
+          setEditorVisible(false);
+          refreshNotesForSelectedDate();
+          return 0;
+        }
+        if (code == static_cast<int>(CalendarNotify::BackToMonth)) {
+          if (m_calendarView) {
+            m_calendarView->setMode(CalendarViewMode::Month);
+          }
+          setEditorVisible(false);
+          refreshNotesForSelectedDate();
+          return 0;
+        }
+        if (code == static_cast<int>(CalendarNotify::DayAdd)) {
+          if (m_calendarView) {
+            const int minutes = std::clamp(m_calendarView->dayClickMinutes(), 0, 1439);
+            SYSTEMTIME day = selectedDateLocal();
+            day.wHour = static_cast<WORD>(minutes / 60);
+            day.wMinute = static_cast<WORD>(minutes % 60);
+            day.wSecond = 0;
+            day.wMilliseconds = 0;
+
+            Note n;
+            n.id = WinUtil::guidString();
+            n.title = L"Новая встреча";
+            n.importance = 0;
+            n.category = 0;
+            n.reminderMinutesBefore = 0;
+            n.repeatType = RepeatType::None;
+            n.repeatWeekdaysMask = 0;
+            n.contentMode = NoteContentMode::VisualRtf;
+            n.contentRtf = "{\\rtf1\\ansi\\deff0\\fs24 }";
+            n.autoHideEnabled = false;
+            n.autoHideSeconds = 5;
+            n.scheduledAtUtcMs = TimeUtils::localSystemTimeToUnixMsUtc(day);
+
+            std::wstring err;
+            if (!NoteRepository::upsert(n, &err)) {
+              MessageBoxW(m_hwnd, err.c_str(), L"Ошибка сохранения", MB_ICONERROR);
+              return 0;
+            }
+            refreshNotesForSelectedDate();
+            loadNoteToEditor(n);
+            setEditorVisible(true);
+          }
+          return 0;
+        }
+        if (code == static_cast<int>(CalendarNotify::DayEdit)) {
+          if (m_calendarView) {
+            const std::wstring id = m_calendarView->dayClickNoteId();
+            if (!id.empty()) {
+              std::wstring err;
+              const auto opt = NoteRepository::getById(id, &err);
+              if (opt) {
+                loadNoteToEditor(*opt);
+                setEditorVisible(true);
+              } else if (!err.empty()) {
+                MessageBoxW(m_hwnd, err.c_str(), L"Ошибка чтения", MB_ICONERROR);
+              }
+            }
+          }
+          return 0;
+        }
+        if (code == static_cast<int>(CalendarNotify::DayDelete)) {
+          if (m_calendarView) {
+            const std::wstring id = m_calendarView->dayClickNoteId();
+            if (!id.empty()) {
+              if (MessageBoxW(m_hwnd, L"Удалить выбранную заметку?", L"Подтверждение", MB_ICONWARNING | MB_YESNO) != IDYES) {
+                return 0;
+              }
+              std::wstring err;
+              if (!NoteRepository::removeById(id, &err)) {
+                if (!err.empty()) {
+                  MessageBoxW(m_hwnd, err.c_str(), L"Ошибка удаления", MB_ICONERROR);
+                }
+                return 0;
+              }
+              if (m_currentNote && m_currentNote->id == id) {
+                m_currentNote.reset();
+                clearEditor();
+                setEditorVisible(false);
+              }
+              refreshNotesForSelectedDate();
+            }
+          }
+          return 0;
+        }
+
         flushAutosave();
         refreshNotesForSelectedDate();
         return 0;
@@ -374,6 +553,25 @@ LRESULT MainWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
           }
           break;
+        case IDC_COMBO_REPEAT:
+          if (HIWORD(wParam) == CBN_SELCHANGE) {
+            markEditorDirty();
+            updateRepeatUi();
+            return 0;
+          }
+          break;
+        case IDC_REPEAT_MON:
+        case IDC_REPEAT_TUE:
+        case IDC_REPEAT_WED:
+        case IDC_REPEAT_THU:
+        case IDC_REPEAT_FRI:
+        case IDC_REPEAT_SAT:
+        case IDC_REPEAT_SUN:
+          if (HIWORD(wParam) == BN_CLICKED) {
+            markEditorDirty();
+            return 0;
+          }
+          break;
         case IDC_CHK_SOUND:
           if (HIWORD(wParam) == BN_CLICKED) {
             const bool enabled = (SendMessageW(m_chkSound, BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -404,8 +602,12 @@ LRESULT MainWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       onCommand(LOWORD(wParam));
       return 0;
     case WM_NOTIFY:
-      onNotify(reinterpret_cast<NMHDR*>(lParam));
-      return 0;
+      return onNotify(reinterpret_cast<NMHDR*>(lParam));
+    case WM_DRAWITEM:
+      if (onDrawItem(reinterpret_cast<DRAWITEMSTRUCT*>(lParam))) {
+        return TRUE;
+      }
+      return FALSE;
     case WM_HSCROLL:
       onHScroll(reinterpret_cast<HWND>(lParam));
       return 0;
@@ -420,11 +622,7 @@ LRESULT MainWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
           KillTimer(m_hwnd, TIMER_AUTOSAVE);
           m_autosaveTimerId = 0;
         }
-        if (m_editorDirty) {
-          saveEditorToNote(false);
-        }
-        // Keep preview in sync (without requiring manual save).
-        updateNotificationPreview();
+        // Manual save only: ignore autosave timer.
       }
       return 0;
     case WM_APP_TRAY:
@@ -480,6 +678,18 @@ void MainWindow::onCreate() {
   m_theme = UiTheme::fromStyle((s == 1) ? UiThemeStyle::Minimal : UiThemeStyle::Premium);
   recreateBrushes();
 
+  // App icon (generated)
+  if (m_appIconLarge) DestroyIcon(m_appIconLarge);
+  if (m_appIconSmall) DestroyIcon(m_appIconSmall);
+  m_appIconLarge = AppIcon::createIcon(64, m_theme.style);
+  m_appIconSmall = AppIcon::createIcon(32, m_theme.style);
+  if (m_appIconLarge) {
+    SendMessageW(m_hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(m_appIconLarge));
+  }
+  if (m_appIconSmall) {
+    SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(m_appIconSmall));
+  }
+
   m_font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 
   // Create bold font for formatting buttons
@@ -495,6 +705,7 @@ void MainWindow::onCreate() {
     10, 10, 180, 36,
     m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_ADD)), m_hInstance, nullptr
   );
+  registerButtonStyle(m_btnAdd, BTN_STYLE_PRIMARY);
 
   m_btnRefresh = CreateWindowExW(
     0, L"BUTTON", L"Обновить",
@@ -502,6 +713,7 @@ void MainWindow::onCreate() {
     200, 10, 110, 36,
     m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_REFRESH)), m_hInstance, nullptr
   );
+  registerButtonStyle(m_btnRefresh, BTN_STYLE_NEUTRAL);
 
   // Premium calendar view (custom drawn)
   m_calendarView = std::make_unique<CalendarView>();
@@ -538,7 +750,7 @@ void MainWindow::onCreate() {
   );
 
   m_lblTime = CreateWindowExW(
-    0, L"STATIC", L"Начало:",
+    0, L"STATIC", L"Время начала:",
     WS_CHILD | WS_VISIBLE | SS_LEFT,
     520, 294, 60, 20,
     m_hwnd, nullptr, m_hInstance, nullptr
@@ -641,6 +853,80 @@ void MainWindow::onCreate() {
   SendMessageW(m_comboReminder, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"1 неделя"));
   SendMessageW(m_comboReminder, CB_SETCURSEL, 0, 0);
 
+  m_lblRepeat = CreateWindowExW(
+    0, L"STATIC", L"Повторение:",
+    WS_CHILD | WS_VISIBLE | SS_LEFT,
+    520, 294, 90, 20,
+    m_hwnd, nullptr, m_hInstance, nullptr
+  );
+
+  m_comboRepeat = CreateWindowExW(
+    0,
+    WC_COMBOBOXW,
+    nullptr,
+    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
+    620, 292, 140, 200,
+    m_hwnd,
+    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_COMBO_REPEAT)),
+    m_hInstance,
+    nullptr
+  );
+  SetWindowTheme(m_comboRepeat, L"Explorer", nullptr);
+  SendMessageW(m_comboRepeat, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Нет"));
+  SendMessageW(m_comboRepeat, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Каждый день"));
+  SendMessageW(m_comboRepeat, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Каждую неделю"));
+  SendMessageW(m_comboRepeat, CB_SETCURSEL, 0, 0);
+
+  m_lblRepeatDays = CreateWindowExW(
+    0, L"STATIC", L"Дни:",
+    WS_CHILD | SS_LEFT,
+    520, 294, 40, 20,
+    m_hwnd, nullptr, m_hInstance, nullptr
+  );
+
+  m_chkRepeatMon = CreateWindowExW(
+    0, L"BUTTON", L"Пн",
+    WS_CHILD | BS_AUTOCHECKBOX,
+    520, 294, 34, 22,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_REPEAT_MON)), m_hInstance, nullptr
+  );
+  m_chkRepeatTue = CreateWindowExW(
+    0, L"BUTTON", L"Вт",
+    WS_CHILD | BS_AUTOCHECKBOX,
+    520, 294, 34, 22,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_REPEAT_TUE)), m_hInstance, nullptr
+  );
+  m_chkRepeatWed = CreateWindowExW(
+    0, L"BUTTON", L"Ср",
+    WS_CHILD | BS_AUTOCHECKBOX,
+    520, 294, 34, 22,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_REPEAT_WED)), m_hInstance, nullptr
+  );
+  m_chkRepeatThu = CreateWindowExW(
+    0, L"BUTTON", L"Чт",
+    WS_CHILD | BS_AUTOCHECKBOX,
+    520, 294, 34, 22,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_REPEAT_THU)), m_hInstance, nullptr
+  );
+  m_chkRepeatFri = CreateWindowExW(
+    0, L"BUTTON", L"Пт",
+    WS_CHILD | BS_AUTOCHECKBOX,
+    520, 294, 34, 22,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_REPEAT_FRI)), m_hInstance, nullptr
+  );
+  m_chkRepeatSat = CreateWindowExW(
+    0, L"BUTTON", L"Сб",
+    WS_CHILD | BS_AUTOCHECKBOX,
+    520, 294, 34, 22,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_REPEAT_SAT)), m_hInstance, nullptr
+  );
+  m_chkRepeatSun = CreateWindowExW(
+    0, L"BUTTON", L"Вс",
+    WS_CHILD | BS_AUTOCHECKBOX,
+    520, 294, 34, 22,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_REPEAT_SUN)), m_hInstance, nullptr
+  );
+
   m_chkAutoHide = CreateWindowExW(
     0,
     L"BUTTON",
@@ -685,6 +971,7 @@ void MainWindow::onCreate() {
     520, 328, 120, 32,
     m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_SAVE)), m_hInstance, nullptr
   );
+  registerButtonStyle(m_btnSave, BTN_STYLE_PRIMARY);
 
   m_btnDelete = CreateWindowExW(
     0, L"BUTTON", L"Удалить",
@@ -692,6 +979,15 @@ void MainWindow::onCreate() {
     650, 328, 100, 32,
     m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_DELETE)), m_hInstance, nullptr
   );
+  registerButtonStyle(m_btnDelete, BTN_STYLE_DANGER);
+
+  m_btnCloseEditor = CreateWindowExW(
+    0, L"BUTTON", L"Закрыть",
+    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+    760, 328, 100, 32,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_CLOSE_EDITOR)), m_hInstance, nullptr
+  );
+  registerButtonStyle(m_btnCloseEditor, BTN_STYLE_GHOST);
 
   // Preview checkbox removed - preview is always visible now
   m_chkPreview = nullptr;
@@ -707,6 +1003,7 @@ void MainWindow::onCreate() {
     m_hInstance,
     nullptr
   );
+  registerButtonStyle(m_btnPreviewPopup, BTN_STYLE_NEUTRAL);
 
   m_previewLabel = CreateWindowExW(
     0, L"STATIC", L"Предпросмотр (как в окне уведомления):",
@@ -851,6 +1148,7 @@ void MainWindow::onCreate() {
     nullptr
   );
   SetWindowTheme(m_btnTestSound, L"Explorer", nullptr);
+  registerButtonStyle(m_btnTestSound, BTN_STYLE_NEUTRAL);
 
   // No mode tabs: single WYSIWYG editor
 
@@ -885,6 +1183,11 @@ void MainWindow::onCreate() {
     680, 410, 44, 32,
     m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_IMAGE)), m_hInstance, nullptr
   );
+  registerButtonStyle(m_btnBold, BTN_STYLE_GHOST);
+  registerButtonStyle(m_btnItalic, BTN_STYLE_GHOST);
+  registerButtonStyle(m_btnUnderline, BTN_STYLE_GHOST);
+  registerButtonStyle(m_btnBullet, BTN_STYLE_GHOST);
+  registerButtonStyle(m_btnImage, BTN_STYLE_GHOST);
 
   m_editorRich = CreateWindowExW(
     WS_EX_CLIENTEDGE,
@@ -934,6 +1237,7 @@ void MainWindow::onCreate() {
   SendMessageW(m_editAutoHideSeconds, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnSave, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnDelete, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
+  SendMessageW(m_btnCloseEditor, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnPreviewPopup, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_previewLabel, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_previewTitle, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontBold), TRUE);
@@ -994,6 +1298,7 @@ void MainWindow::onCreate() {
   clearEditor();
   updateAutoHideEnabled();
   refreshNotesForSelectedDate();
+  setEditorVisible(false);
 }
 
 void MainWindow::onDestroy() {
@@ -1019,6 +1324,14 @@ void MainWindow::onDestroy() {
   if (m_fontBold) {
     DeleteObject(m_fontBold);
     m_fontBold = nullptr;
+  }
+  if (m_appIconLarge) {
+    DestroyIcon(m_appIconLarge);
+    m_appIconLarge = nullptr;
+  }
+  if (m_appIconSmall) {
+    DestroyIcon(m_appIconSmall);
+    m_appIconSmall = nullptr;
   }
   if (m_bgBrush) {
     DeleteObject(m_bgBrush);
@@ -1074,10 +1387,16 @@ void MainWindow::onSize(int width, int height) {
 
   const int usableH = height - top - margin;
   const int usableW = width - margin * 2;
-  
-  // Left side: calendar (35% width)
-  const int leftW = std::max(sx(280), (usableW * 35) / 100);
-  // Right side: list + editor
+ 
+  if (!m_editorVisible) {
+    if (m_calendarView && m_calendarView->hwnd()) {
+      MoveWindow(m_calendarView->hwnd(), margin, top, usableW, usableH, TRUE);
+    }
+    return;
+  }
+
+  // Left side: calendar (45% width)
+  const int leftW = std::max(sx(320), (usableW * 45) / 100);
   const int rightW = usableW - leftW - margin;
   const int rightX = margin + leftW + margin;
 
@@ -1085,11 +1404,10 @@ void MainWindow::onSize(int width, int height) {
     MoveWindow(m_calendarView->hwnd(), margin, top, leftW, usableH, TRUE);
   }
 
-  // Right panel layout
-  const int listH = std::min(sx(180), std::max(sx(100), usableH / 4));
-  MoveWindow(m_list, rightX, top, rightW, listH, TRUE);
+  // Editor panel layout (list hidden in calendar-focused UX)
+  MoveWindow(m_list, 0, 0, 0, 0, TRUE);
 
-  int y = top + listH + gap;
+  int y = top;
   const int fieldH = sx(28);
   const int labelH = sx(20);
 
@@ -1103,10 +1421,11 @@ void MainWindow::onSize(int width, int height) {
   const int timeW = sx(90);
   const int impW = sx(95);
   const int catW = sx(95);
-  const int remW = sx(95);
+  const int remW = sx(120);
+  const int repW = sx(150);
   const int secW = sx(45);
   const int autoHideW = sx(100);
-  const int lblW = sx(55);
+  const int lblW = sx(90);
 
   int rx = rightX;
   MoveWindow(m_lblTime, rx, y + sx(4), lblW, labelH, TRUE);
@@ -1124,13 +1443,58 @@ void MainWindow::onSize(int width, int height) {
   MoveWindow(m_comboCategory, rx, y, catW, fieldH * 6, TRUE);
   y += fieldH + gap;
 
-  // Row 2: Напомнить + Автоскрытие
+  // Row 2: Напомнить + Повторение
   rx = rightX;
   MoveWindow(m_lblReminder, rx, y + sx(4), lblW, labelH, TRUE);
   rx += lblW;
   MoveWindow(m_comboReminder, rx, y, remW, fieldH * 10, TRUE);
-  rx += remW + gap * 2;
+  rx += remW + gap;
 
+  MoveWindow(m_lblRepeat, rx, y + sx(4), lblW, labelH, TRUE);
+  rx += lblW;
+  MoveWindow(m_comboRepeat, rx, y, repW, fieldH * 6, TRUE);
+  y += fieldH + gap;
+
+  // Row 3: Дни недели (только для еженедельных)
+  const int repeatSel = static_cast<int>(SendMessageW(m_comboRepeat, CB_GETCURSEL, 0, 0));
+  const bool showWeekdays = (repeatSel == static_cast<int>(RepeatType::Weekly));
+  const int dayW = sx(32);
+  const int dayGap = sx(2);
+
+  if (showWeekdays) {
+    ShowWindow(m_lblRepeatDays, SW_SHOW);
+    ShowWindow(m_chkRepeatMon, SW_SHOW);
+    ShowWindow(m_chkRepeatTue, SW_SHOW);
+    ShowWindow(m_chkRepeatWed, SW_SHOW);
+    ShowWindow(m_chkRepeatThu, SW_SHOW);
+    ShowWindow(m_chkRepeatFri, SW_SHOW);
+    ShowWindow(m_chkRepeatSat, SW_SHOW);
+    ShowWindow(m_chkRepeatSun, SW_SHOW);
+
+    rx = rightX;
+    MoveWindow(m_lblRepeatDays, rx, y + sx(4), sx(40), labelH, TRUE);
+    rx += sx(40);
+    MoveWindow(m_chkRepeatMon, rx, y, dayW, fieldH, TRUE); rx += dayW + dayGap;
+    MoveWindow(m_chkRepeatTue, rx, y, dayW, fieldH, TRUE); rx += dayW + dayGap;
+    MoveWindow(m_chkRepeatWed, rx, y, dayW, fieldH, TRUE); rx += dayW + dayGap;
+    MoveWindow(m_chkRepeatThu, rx, y, dayW, fieldH, TRUE); rx += dayW + dayGap;
+    MoveWindow(m_chkRepeatFri, rx, y, dayW, fieldH, TRUE); rx += dayW + dayGap;
+    MoveWindow(m_chkRepeatSat, rx, y, dayW, fieldH, TRUE); rx += dayW + dayGap;
+    MoveWindow(m_chkRepeatSun, rx, y, dayW, fieldH, TRUE);
+    y += fieldH + gap;
+  } else {
+    ShowWindow(m_lblRepeatDays, SW_HIDE);
+    ShowWindow(m_chkRepeatMon, SW_HIDE);
+    ShowWindow(m_chkRepeatTue, SW_HIDE);
+    ShowWindow(m_chkRepeatWed, SW_HIDE);
+    ShowWindow(m_chkRepeatThu, SW_HIDE);
+    ShowWindow(m_chkRepeatFri, SW_HIDE);
+    ShowWindow(m_chkRepeatSat, SW_HIDE);
+    ShowWindow(m_chkRepeatSun, SW_HIDE);
+  }
+
+  // Row 4: Автоскрытие
+  rx = rightX;
   MoveWindow(m_chkAutoHide, rx, y + sx(2), autoHideW, fieldH, TRUE);
   rx += autoHideW + sx(4);
   MoveWindow(m_editAutoHideSeconds, rx, y, secW, fieldH, TRUE);
@@ -1144,8 +1508,10 @@ void MainWindow::onSize(int width, int height) {
   // Save/Delete buttons
   const int btnW = sx(120);
   const int delW = sx(100);
+  const int closeW = sx(100);
   MoveWindow(m_btnSave, rightX, y, btnW, sx(32), TRUE);
   MoveWindow(m_btnDelete, rightX + btnW + gap, y, delW, sx(32), TRUE);
+  MoveWindow(m_btnCloseEditor, rightX + btnW + gap + delW + gap, y, closeW, sx(32), TRUE);
   y += sx(32) + sx(6);
 
   // Preview popup button (checkbox removed - preview always visible)
@@ -1229,6 +1595,10 @@ void MainWindow::onCommand(int id) {
       flushAutosave();
       deleteCurrentNote();
       return;
+    case IDC_BTN_CLOSE_EDITOR:
+      flushAutosave();
+      setEditorVisible(false);
+      return;
     case IDC_BTN_BOLD:
       RichEditUtil::toggleBold(m_editorRich);
       markEditorDirty();
@@ -1295,11 +1665,56 @@ void MainWindow::onCommand(int id) {
   }
 }
 
-void MainWindow::onNotify(NMHDR* hdr) {
-  if (!hdr) return;
-  if (m_refreshingList) return;
+LRESULT MainWindow::onNotify(NMHDR* hdr) {
+  if (!hdr) return 0;
+  if (m_refreshingList) return 0;
+
+  if (hdr->idFrom == IDC_LIST && hdr->code == NM_CUSTOMDRAW) {
+    auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(hdr);
+    switch (cd->nmcd.dwDrawStage) {
+      case CDDS_PREPAINT:
+        return CDRF_NOTIFYITEMDRAW;
+      case CDDS_ITEMPREPAINT:
+        return CDRF_NOTIFYSUBITEMDRAW;
+      case CDDS_ITEMPREPAINT | CDDS_SUBITEM: {
+        const int item = static_cast<int>(cd->nmcd.dwItemSpec);
+        const int sub = cd->iSubItem;
+        const bool selected = (cd->nmcd.uItemState & CDIS_SELECTED) != 0;
+
+        if (sub == 1) {
+          RECT rc{};
+          if (ListView_GetSubItemRect(m_list, item, sub, LVIR_BOUNDS, &rc)) {
+            const int importance = (item >= 0 && item < static_cast<int>(m_listNoteMeta.size()))
+                                     ? m_listNoteMeta[static_cast<size_t>(item)].importance
+                                     : 0;
+            drawImportanceIcon(cd->nmcd.hdc, rc, importance, m_theme, selected);
+          }
+          return CDRF_SKIPDEFAULT;
+        }
+
+        if (sub == 0 && !selected && m_listIsToday) {
+          if (item >= 0 && item < static_cast<int>(m_listNoteMeta.size())) {
+            const int64_t nowUtc = TimeUtils::unixMsNowUtc();
+            const int64_t ts = m_listNoteMeta[static_cast<size_t>(item)].scheduledAtUtcMs;
+            const int64_t diff = ts - nowUtc;
+            if (diff < 0) {
+              cd->clrText = m_theme.mutedText;
+            } else if (diff <= 30 * 60 * 1000LL) {
+              cd->clrText = m_theme.badgeUrgent;
+            } else if (diff <= 2 * 60 * 60 * 1000LL) {
+              cd->clrText = m_theme.badgeImportant;
+            }
+          }
+        }
+        return CDRF_NEWFONT;
+      }
+      default:
+        break;
+    }
+  }
 
   if (hdr->idFrom == IDC_LIST && hdr->code == LVN_ITEMCHANGED) {
+    if (!m_editorVisible) return 0;
     auto* nmlv = reinterpret_cast<NMLISTVIEW*>(hdr);
     if ((nmlv->uChanged & LVIF_STATE) != 0) {
       const bool nowSelected = (nmlv->uNewState & LVIS_SELECTED) != 0;
@@ -1315,13 +1730,14 @@ void MainWindow::onNotify(NMHDR* hdr) {
         }
       }
     }
-    return;
+    return 0;
   }
 
   if (hdr->idFrom == IDC_TIME_PICKER && hdr->code == DTN_DATETIMECHANGE) {
     markEditorDirty();
-    return;
+    return 0;
   }
+  return 0;
 }
 
 void MainWindow::onHScroll(HWND src) {
@@ -1346,6 +1762,9 @@ SYSTEMTIME MainWindow::selectedDateLocal() const {
 void MainWindow::refreshNotesForSelectedDate() {
   m_refreshingList = true;
   const SYSTEMTIME day = selectedDateLocal();
+  SYSTEMTIME now{};
+  GetLocalTime(&now);
+  m_listIsToday = (day.wYear == now.wYear && day.wMonth == now.wMonth && day.wDay == now.wDay);
 
   std::wstring err;
   const auto notes = NoteRepository::listForDate(day, &err);
@@ -1353,14 +1772,20 @@ void MainWindow::refreshNotesForSelectedDate() {
     MessageBoxW(m_hwnd, err.c_str(), L"Ошибка чтения заметок", MB_ICONERROR);
   }
 
+  if (m_calendarView) {
+    m_calendarView->setDayNotes(notes);
+  }
+
   ListView_DeleteAllItems(m_list);
   m_listNoteIds.clear();
+  m_listNoteMeta.clear();
 
   const std::wstring keepId = (m_currentNote ? m_currentNote->id : L"");
 
   int i = 0;
   for (const auto& n : notes) {
     m_listNoteIds.push_back(n.id);
+    m_listNoteMeta.push_back({ n.scheduledAtUtcMs, n.importance });
 
     SYSTEMTIME stLocal = TimeUtils::unixMsToSystemTimeLocal(n.scheduledAtUtcMs);
     const std::wstring t = WinUtil::formatHHMM(stLocal);
@@ -1409,16 +1834,10 @@ void MainWindow::refreshNotesForSelectedDate() {
 
   m_refreshingList = false;
 
-  if (selectIdx >= 0) {
-    const auto opt = NoteRepository::getById(m_listNoteIds[static_cast<size_t>(selectIdx)], nullptr);
-    if (opt) {
-      loadNoteToEditor(*opt);
-      return;
-    }
+  if (!m_editorVisible) {
+    m_currentNote.reset();
+    clearEditor();
   }
-
-  m_currentNote.reset();
-  clearEditor();
 }
 
 // (tabs removed) single WYSIWYG editor is always visible
@@ -1429,6 +1848,8 @@ void MainWindow::clearEditor() {
   SendMessageW(m_comboImportance, CB_SETCURSEL, 0, 0);
   SendMessageW(m_comboCategory, CB_SETCURSEL, 0, 0);
   SendMessageW(m_comboReminder, CB_SETCURSEL, 0, 0);
+  SendMessageW(m_comboRepeat, CB_SETCURSEL, 0, 0);
+  setRepeatMaskUi(0);
   SendMessageW(m_chkAutoHide, BM_SETCHECK, BST_UNCHECKED, 0);
   setControlText(m_editAutoHideSeconds, L"5");
   updateAutoHideEnabled();
@@ -1445,7 +1866,9 @@ void MainWindow::clearEditor() {
   RichEditUtil::setRtfW(m_editorRich, L"{\\rtf1\\ansi\\deff0\\fs24 }");
 
   m_editorDirty = false;
+  updateSaveButtonState();
   m_loadingEditor = false;
+  updateRepeatUi();
 }
 
 void MainWindow::loadNoteToEditor(const Note& note) {
@@ -1456,6 +1879,8 @@ void MainWindow::loadNoteToEditor(const Note& note) {
   SendMessageW(m_comboImportance, CB_SETCURSEL, note.importance, 0);
   SendMessageW(m_comboCategory, CB_SETCURSEL, std::clamp(note.category, 0, 6), 0);
   SendMessageW(m_comboReminder, CB_SETCURSEL, reminderMinutesToComboIndex(note.reminderMinutesBefore), 0);
+  SendMessageW(m_comboRepeat, CB_SETCURSEL, static_cast<int>(note.repeatType), 0);
+  setRepeatMaskUi(note.repeatWeekdaysMask);
   SendMessageW(m_chkAutoHide, BM_SETCHECK, note.autoHideEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
   setControlText(m_editAutoHideSeconds, std::to_wstring(std::max(1, note.autoHideSeconds)));
   updateAutoHideEnabled();
@@ -1477,6 +1902,8 @@ void MainWindow::loadNoteToEditor(const Note& note) {
 
   m_loadingEditor = false;
   m_editorDirty = false;
+  updateSaveButtonState();
+  updateRepeatUi();
   updateNotificationPreview();
 }
 
@@ -1503,6 +1930,7 @@ void MainWindow::addNewNote() {
 
   refreshNotesForSelectedDate();
   loadNoteToEditor(n);
+  setEditorVisible(true);
 }
 
 void MainWindow::saveEditorToNote(bool refreshAfter) {
@@ -1526,6 +1954,19 @@ void MainWindow::saveEditorToNote(bool refreshAfter) {
   const int reminderIdx = static_cast<int>(SendMessageW(m_comboReminder, CB_GETCURSEL, 0, 0));
   n.reminderMinutesBefore = reminderComboIndexToMinutes(reminderIdx);
 
+  const int repeatIdx = static_cast<int>(SendMessageW(m_comboRepeat, CB_GETCURSEL, 0, 0));
+  n.repeatType = static_cast<RepeatType>(std::clamp(repeatIdx, 0, 2));
+  int repeatMask = repeatMaskFromUi();
+  if (n.repeatType == RepeatType::Weekly) {
+    if (repeatMask == 0) {
+      repeatMask = defaultRepeatMaskForSelectedDate();
+      setRepeatMaskUi(repeatMask);
+    }
+  } else {
+    repeatMask = 0;
+  }
+  n.repeatWeekdaysMask = repeatMask;
+
   n.autoHideEnabled = (SendMessageW(m_chkAutoHide, BM_GETCHECK, 0, 0) == BST_CHECKED);
   n.autoHideSeconds = std::clamp(toIntOr(getControlText(m_editAutoHideSeconds), 5), 1, 3600);
 
@@ -1546,6 +1987,27 @@ void MainWindow::saveEditorToNote(bool refreshAfter) {
     n.scheduledAtUtcMs = TimeUtils::localSystemTimeToUnixMsUtc(t);
   }
 
+  // Preserve fire/dismiss state unless user moved the event to a new future time.
+  const bool scheduledChanged = (m_currentNote && prevScheduled != 0 && prevScheduled != n.scheduledAtUtcMs);
+  const int64_t nowMs = TimeUtils::unixMsNowUtc();
+  if (scheduledChanged && n.scheduledAtUtcMs > nowMs) {
+    n.hasFired = false;
+    n.firedAtUtcMs = 0;
+    n.dismissed = false;
+    n.dismissedAtUtcMs = 0;
+  } else if (m_currentNote && !n.id.empty()) {
+    if (const auto stored = NoteRepository::getById(n.id, nullptr)) {
+      if (stored->hasFired) {
+        n.hasFired = stored->hasFired;
+        n.firedAtUtcMs = stored->firedAtUtcMs;
+      }
+      if (stored->dismissed) {
+        n.dismissed = stored->dismissed;
+        n.dismissedAtUtcMs = stored->dismissedAtUtcMs;
+      }
+    }
+  }
+
   // Single WYSIWYG editor: always store RTF.
   n.contentMode = NoteContentMode::VisualRtf;
   n.contentRtf = RichEditUtil::getRtfBytes(m_editorRich);
@@ -1563,6 +2025,7 @@ void MainWindow::saveEditorToNote(bool refreshAfter) {
 
   m_currentNote = n;
   m_editorDirty = false;
+  updateSaveButtonState();
   updateNotificationPreview();
 
   // Update calendar meta (badges/preview)
@@ -1588,6 +2051,9 @@ void MainWindow::saveEditorToNote(bool refreshAfter) {
       ListView_SetItemText(m_list, static_cast<int>(i), 0, const_cast<wchar_t*>(timeText.c_str()));
       ListView_SetItemText(m_list, static_cast<int>(i), 1, const_cast<wchar_t*>(impText.c_str()));
       ListView_SetItemText(m_list, static_cast<int>(i), 2, const_cast<wchar_t*>(title.c_str()));
+      if (i < m_listNoteMeta.size()) {
+        m_listNoteMeta[i] = { n.scheduledAtUtcMs, n.importance };
+      }
       return;
     }
   }
@@ -1619,6 +2085,200 @@ void MainWindow::updateAutoHideEnabled() {
   const bool enabled = (SendMessageW(m_chkAutoHide, BM_GETCHECK, 0, 0) == BST_CHECKED);
   EnableWindow(m_editAutoHideSeconds, enabled);
   EnableWindow(m_spinAutoHideSeconds, enabled);
+}
+
+int MainWindow::repeatMaskFromUi() const {
+  int mask = 0;
+  if (SendMessageW(m_chkRepeatMon, BM_GETCHECK, 0, 0) == BST_CHECKED) mask |= kRepeatDayMon;
+  if (SendMessageW(m_chkRepeatTue, BM_GETCHECK, 0, 0) == BST_CHECKED) mask |= kRepeatDayTue;
+  if (SendMessageW(m_chkRepeatWed, BM_GETCHECK, 0, 0) == BST_CHECKED) mask |= kRepeatDayWed;
+  if (SendMessageW(m_chkRepeatThu, BM_GETCHECK, 0, 0) == BST_CHECKED) mask |= kRepeatDayThu;
+  if (SendMessageW(m_chkRepeatFri, BM_GETCHECK, 0, 0) == BST_CHECKED) mask |= kRepeatDayFri;
+  if (SendMessageW(m_chkRepeatSat, BM_GETCHECK, 0, 0) == BST_CHECKED) mask |= kRepeatDaySat;
+  if (SendMessageW(m_chkRepeatSun, BM_GETCHECK, 0, 0) == BST_CHECKED) mask |= kRepeatDaySun;
+  return mask;
+}
+
+void MainWindow::setRepeatMaskUi(int mask) {
+  SendMessageW(m_chkRepeatMon, BM_SETCHECK, (mask & kRepeatDayMon) ? BST_CHECKED : BST_UNCHECKED, 0);
+  SendMessageW(m_chkRepeatTue, BM_SETCHECK, (mask & kRepeatDayTue) ? BST_CHECKED : BST_UNCHECKED, 0);
+  SendMessageW(m_chkRepeatWed, BM_SETCHECK, (mask & kRepeatDayWed) ? BST_CHECKED : BST_UNCHECKED, 0);
+  SendMessageW(m_chkRepeatThu, BM_SETCHECK, (mask & kRepeatDayThu) ? BST_CHECKED : BST_UNCHECKED, 0);
+  SendMessageW(m_chkRepeatFri, BM_SETCHECK, (mask & kRepeatDayFri) ? BST_CHECKED : BST_UNCHECKED, 0);
+  SendMessageW(m_chkRepeatSat, BM_SETCHECK, (mask & kRepeatDaySat) ? BST_CHECKED : BST_UNCHECKED, 0);
+  SendMessageW(m_chkRepeatSun, BM_SETCHECK, (mask & kRepeatDaySun) ? BST_CHECKED : BST_UNCHECKED, 0);
+}
+
+int MainWindow::defaultRepeatMaskForSelectedDate() const {
+  SYSTEMTIME day = normalizeLocalDate(selectedDateLocal());
+  return weekdayMaskFromWDayOfWeek(day.wDayOfWeek);
+}
+
+void MainWindow::updateRepeatUi() {
+  if (!m_comboRepeat) return;
+  const int sel = static_cast<int>(SendMessageW(m_comboRepeat, CB_GETCURSEL, 0, 0));
+  if (sel == static_cast<int>(RepeatType::Weekly)) {
+    if (repeatMaskFromUi() == 0) {
+      setRepeatMaskUi(defaultRepeatMaskForSelectedDate());
+    }
+  }
+  RECT rc{};
+  GetClientRect(m_hwnd, &rc);
+  onSize(rc.right - rc.left, rc.bottom - rc.top);
+}
+
+void MainWindow::setEditorVisible(bool visible) {
+  m_editorVisible = visible;
+  auto show = [&](HWND h, bool v) {
+    if (!h) return;
+    ShowWindow(h, v ? SW_SHOW : SW_HIDE);
+  };
+
+  // List is hidden in calendar-focused UX.
+  show(m_list, false);
+
+  show(m_lblTitle, visible);
+  show(m_editTitle, visible);
+  show(m_lblTime, visible);
+  show(m_timePicker, visible);
+  show(m_lblImportance, visible);
+  show(m_comboImportance, visible);
+  show(m_lblCategory, visible);
+  show(m_comboCategory, visible);
+  show(m_lblReminder, visible);
+  show(m_comboReminder, visible);
+  show(m_lblRepeat, visible);
+  show(m_comboRepeat, visible);
+  show(m_lblRepeatDays, visible);
+  show(m_chkRepeatMon, visible);
+  show(m_chkRepeatTue, visible);
+  show(m_chkRepeatWed, visible);
+  show(m_chkRepeatThu, visible);
+  show(m_chkRepeatFri, visible);
+  show(m_chkRepeatSat, visible);
+  show(m_chkRepeatSun, visible);
+  show(m_chkAutoHide, visible);
+  show(m_editAutoHideSeconds, visible);
+  show(m_spinAutoHideSeconds, visible);
+  show(m_btnSave, visible);
+  show(m_btnDelete, visible);
+  show(m_btnCloseEditor, visible);
+  show(m_btnPreviewPopup, visible);
+  show(m_chkSound, visible);
+  show(m_lblSound, visible);
+  show(m_lblSoundNormal, visible);
+  show(m_lblSoundImportant, visible);
+  show(m_lblSoundUrgent, visible);
+  show(m_comboSoundNormal, visible);
+  show(m_comboSoundImportant, visible);
+  show(m_comboSoundUrgent, visible);
+  show(m_btnTestSound, visible);
+  show(m_btnBold, visible);
+  show(m_btnItalic, visible);
+  show(m_btnUnderline, visible);
+  show(m_btnBullet, visible);
+  show(m_btnImage, visible);
+  show(m_editorRich, visible);
+
+  // Inline preview always hidden (legacy)
+  show(m_previewLabel, false);
+  show(m_previewStripe, false);
+  show(m_previewTitle, false);
+  show(m_previewClose, false);
+  show(m_previewSnooze, false);
+  show(m_previewRich, false);
+  show(m_previewProgress, false);
+  show(m_previewCountdown, false);
+
+  RECT rc{};
+  GetClientRect(m_hwnd, &rc);
+  onSize(rc.right - rc.left, rc.bottom - rc.top);
+  updateSaveButtonState();
+}
+
+void MainWindow::updateSaveButtonState() {
+  if (!m_btnSave) return;
+  const BOOL enable = m_editorVisible && m_editorDirty;
+  EnableWindow(m_btnSave, enable);
+}
+
+void MainWindow::registerButtonStyle(HWND hwnd, int style) {
+  if (!hwnd) return;
+  m_buttonStyles[hwnd] = style;
+  LONG_PTR s = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  if ((s & BS_OWNERDRAW) == 0) {
+    SetWindowLongPtrW(hwnd, GWL_STYLE, s | BS_OWNERDRAW);
+  }
+}
+
+LRESULT MainWindow::onDrawItem(DRAWITEMSTRUCT* dis) {
+  if (!dis) return FALSE;
+  const auto it = m_buttonStyles.find(dis->hwndItem);
+  if (it == m_buttonStyles.end()) return FALSE;
+
+  const int style = it->second;
+  const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+  const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+
+  COLORREF bg = m_theme.panelBg;
+  COLORREF border = m_theme.gridLine;
+  COLORREF text = m_theme.text;
+
+  if (style == BTN_STYLE_PRIMARY) {
+    bg = m_theme.accent;
+    border = m_theme.accent;
+    text = RGB(255, 255, 255);
+  } else if (style == BTN_STYLE_DANGER) {
+    bg = m_theme.badgeUrgent;
+    border = m_theme.badgeUrgent;
+    text = RGB(255, 255, 255);
+  } else if (style == BTN_STYLE_GHOST) {
+    bg = m_theme.windowBg;
+    border = m_theme.gridLine;
+    text = m_theme.text;
+  }
+
+  if (pressed) {
+    bg = blendColor(bg, RGB(0, 0, 0), 25);
+  }
+  if (disabled) {
+    bg = blendColor(bg, RGB(255, 255, 255), 120);
+    text = m_theme.mutedText;
+    border = blendColor(border, RGB(255, 255, 255), 120);
+  }
+
+  HDC hdc = dis->hDC;
+  RECT rc = dis->rcItem;
+  const int radius = MulDiv(8, AppSettings::uiZoomPercent(), 100);
+
+  HBRUSH b = CreateSolidBrush(bg);
+  HPEN p = CreatePen(PS_SOLID, 1, border);
+  HGDIOBJ oldB = SelectObject(hdc, b);
+  HGDIOBJ oldP = SelectObject(hdc, p);
+  RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
+  SelectObject(hdc, oldB);
+  SelectObject(hdc, oldP);
+  DeleteObject(b);
+  DeleteObject(p);
+
+  std::wstring textBuf = getControlText(dis->hwndItem);
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, text);
+  HFONT useFont = m_fontOwned ? m_fontOwned : m_font;
+  if (dis->hwndItem == m_btnBold) {
+    useFont = m_fontBold ? m_fontBold : useFont;
+  }
+  HGDIOBJ oldF = SelectObject(hdc, useFont);
+  DrawTextW(hdc, textBuf.c_str(), static_cast<int>(textBuf.size()), &rc,
+            DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+  SelectObject(hdc, oldF);
+
+  if ((dis->itemState & ODS_FOCUS) != 0) {
+    RECT focus = rc;
+    InflateRect(&focus, -2, -2);
+    DrawFocusRect(hdc, &focus);
+  }
+  return TRUE;
 }
 
 std::wstring MainWindow::openImageFileDialog() {
@@ -1856,15 +2516,17 @@ void MainWindow::showNotificationPreviewPopup() {
   n.title = getControlText(m_editTitle);
   n.importance = std::clamp(static_cast<int>(SendMessageW(m_comboImportance, CB_GETCURSEL, 0, 0)), 0, 2);
   n.contentMode = NoteContentMode::VisualRtf;
-  n.contentRtf = RichEditUtil::getRtfBytes(m_editorRich);
+  n.contentRtf.clear();
   n.autoHideEnabled = (SendMessageW(m_chkAutoHide, BM_GETCHECK, 0, 0) == BST_CHECKED);
   n.autoHideSeconds = std::clamp(toIntOr(getControlText(m_editAutoHideSeconds), 5), 1, 3600);
   n.scheduledAtUtcMs = TimeUtils::unixMsNowUtc();
 
-  // Optional: play sound like a real reminder.
-  playSoundForImportance(n.importance, false);
+  HWND sourceRich = (m_editorRich && IsWindow(m_editorRich)) ? m_editorRich : nullptr;
+  if (!sourceRich && m_currentNote) {
+    n.contentRtf = m_currentNote->contentRtf;
+  }
 
-  auto* w = new NotificationWindow(m_hInstance, n, /*previewOnly*/ true, m_editorRich);
+  auto* w = new NotificationWindow(m_hInstance, n, /*previewOnly*/ true, sourceRich);
   w->show();
 }
 
@@ -1919,8 +2581,10 @@ void MainWindow::insertImageIntoRich() {
 
 void MainWindow::markEditorDirty() {
   if (m_loadingEditor) return;
-  m_editorDirty = true;
-  scheduleAutosave();
+  if (!m_editorDirty) {
+    m_editorDirty = true;
+    updateSaveButtonState();
+  }
 }
 
 void MainWindow::scheduleAutosave() {
@@ -1928,16 +2592,13 @@ void MainWindow::scheduleAutosave() {
     KillTimer(m_hwnd, TIMER_AUTOSAVE);
     m_autosaveTimerId = 0;
   }
-  m_autosaveTimerId = SetTimer(m_hwnd, TIMER_AUTOSAVE, AUTOSAVE_DELAY_MS, nullptr);
+  // Manual save only: autosave disabled.
 }
 
 void MainWindow::flushAutosave() {
   if (m_autosaveTimerId) {
     KillTimer(m_hwnd, TIMER_AUTOSAVE);
     m_autosaveTimerId = 0;
-  }
-  if (m_editorDirty) {
-    saveEditorToNote(false);
   }
 }
 
@@ -2006,7 +2667,12 @@ void MainWindow::checkReminders() {
 
   for (const auto& n : due) {
     // Mark as fired first to avoid repeated popups if user keeps it open.
-    NoteRepository::markFired(n.id, now, nullptr);
+    const int64_t firedAt = (n.repeatType == RepeatType::None) ? now : n.scheduledAtUtcMs;
+    NoteRepository::markFired(n.id, firedAt, nullptr);
+    if (m_currentNote && m_currentNote->id == n.id) {
+      m_currentNote->hasFired = true;
+      m_currentNote->firedAtUtcMs = firedAt;
+    }
 
     auto* w = new NotificationWindow(m_hInstance, n);
     w->show();
@@ -2067,10 +2733,21 @@ void MainWindow::applyUiZoom() {
   SendMessageW(m_comboCategory, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_lblReminder, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_comboReminder, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_lblRepeat, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_comboRepeat, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_lblRepeatDays, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_chkRepeatMon, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_chkRepeatTue, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_chkRepeatWed, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_chkRepeatThu, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_chkRepeatFri, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_chkRepeatSat, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_chkRepeatSun, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_chkAutoHide, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_editAutoHideSeconds, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnSave, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnDelete, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_btnCloseEditor, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnPreviewPopup, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_previewLabel, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_previewTitle, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontBold), TRUE);
@@ -2100,6 +2777,21 @@ void MainWindow::applyUiTheme() {
   const UiThemeStyle style = (s == 1) ? UiThemeStyle::Minimal : UiThemeStyle::Premium;
   m_theme = UiTheme::fromStyle(style);
   recreateBrushes();
+
+  if (m_appIconLarge) DestroyIcon(m_appIconLarge);
+  if (m_appIconSmall) DestroyIcon(m_appIconSmall);
+  m_appIconLarge = AppIcon::createIcon(64, m_theme.style);
+  m_appIconSmall = AppIcon::createIcon(32, m_theme.style);
+  if (m_appIconLarge) {
+    SendMessageW(m_hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(m_appIconLarge));
+  }
+  if (m_appIconSmall) {
+    SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(m_appIconSmall));
+    if (m_trayAdded) {
+      m_nid.hIcon = m_appIconSmall;
+      Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+    }
+  }
 
   if (m_calendarView) {
     m_calendarView->setThemeStyle(style);
@@ -2218,7 +2910,7 @@ void MainWindow::initTray() {
   m_nid.uID = 1;
   m_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   m_nid.uCallbackMessage = WM_APP_TRAY;
-  m_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+  m_nid.hIcon = m_appIconSmall ? m_appIconSmall : LoadIconW(nullptr, IDI_APPLICATION);
   wcscpy_s(m_nid.szTip, _countof(m_nid.szTip), L"AlertCalendar");
 
   if (Shell_NotifyIconW(NIM_ADD, &m_nid)) {

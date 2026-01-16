@@ -1,5 +1,7 @@
 #include "CalendarView.h"
 
+#include "core/TimeUtils.h"
+
 #include <algorithm>
 #include <windowsx.h>
 
@@ -8,8 +10,13 @@ constexpr int kHeaderBaseH = 44;
 constexpr int kDowBaseH = 24;
 constexpr int kCellBaseH = 86;
 
-constexpr int kSelCode = 1;
-constexpr int kMonthCode = 2;
+constexpr int kSelCode = static_cast<int>(CalendarNotify::Selection);
+constexpr int kMonthCode = static_cast<int>(CalendarNotify::MonthChanged);
+constexpr int kOpenDayCode = static_cast<int>(CalendarNotify::OpenDay);
+constexpr int kBackToMonthCode = static_cast<int>(CalendarNotify::BackToMonth);
+constexpr int kDayAddCode = static_cast<int>(CalendarNotify::DayAdd);
+constexpr int kDayEditCode = static_cast<int>(CalendarNotify::DayEdit);
+constexpr int kDayDeleteCode = static_cast<int>(CalendarNotify::DayDelete);
 
 int scale(int px, int zoom) { return MulDiv(px, zoom, 100); }
 
@@ -39,6 +46,24 @@ void drawText(HDC hdc, const std::wstring& s, RECT r, UINT format, COLORREF c) {
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, c);
   DrawTextW(hdc, s.c_str(), static_cast<int>(s.size()), &r, format);
+}
+
+COLORREF importanceColor(int importance, const UiTheme& theme) {
+  if (importance >= 2) return theme.badgeUrgent;
+  if (importance == 1) return theme.badgeImportant;
+  return theme.badgeNormal;
+}
+
+void drawDot(HDC hdc, int cx, int cy, int radius, COLORREF fill, COLORREF border) {
+  HBRUSH b = CreateSolidBrush(fill);
+  HPEN p = CreatePen(PS_SOLID, 1, border);
+  HGDIOBJ oldB = SelectObject(hdc, b);
+  HGDIOBJ oldP = SelectObject(hdc, p);
+  Ellipse(hdc, cx - radius, cy - radius, cx + radius, cy + radius);
+  SelectObject(hdc, oldB);
+  SelectObject(hdc, oldP);
+  DeleteObject(b);
+  DeleteObject(p);
 }
 
 std::wstring monthNameRu(int month) {
@@ -76,7 +101,7 @@ bool CalendarView::create(HINSTANCE hInstance, HWND parent, int controlId) {
 
   WNDCLASSEXW wc{};
   wc.cbSize = sizeof(wc);
-  wc.style = CS_HREDRAW | CS_VREDRAW;
+  wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
   wc.lpfnWndProc = &CalendarView::wndProcThunk;
   wc.cbClsExtra = 0;
   wc.cbWndExtra = sizeof(void*);
@@ -119,6 +144,13 @@ void CalendarView::setThemeStyle(UiThemeStyle style) {
   invalidate();
 }
 
+void CalendarView::setMode(CalendarViewMode mode) {
+  if (m_mode == mode) return;
+  m_mode = mode;
+  recalcLayout();
+  invalidate();
+}
+
 void CalendarView::setMonth(int year, int month) {
   if (month < 1) { month = 12; --year; }
   if (month > 12) { month = 1; ++year; }
@@ -147,6 +179,11 @@ SYSTEMTIME CalendarView::selectedDateLocal() const {
 
 void CalendarView::setDayMeta(const std::array<CalendarDayMeta, 32>& meta) {
   m_dayMeta = meta;
+  invalidate();
+}
+
+void CalendarView::setDayNotes(std::vector<Note> notes) {
+  m_dayNotes = std::move(notes);
   invalidate();
 }
 
@@ -181,14 +218,29 @@ LRESULT CalendarView::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       SetFocus(hwnd);
       onLButtonDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
       return 0;
+    case WM_LBUTTONDBLCLK:
+      SetFocus(hwnd);
+      onLButtonDblClick(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+      return 0;
+    case WM_RBUTTONDOWN:
+      SetFocus(hwnd);
+      onRButtonDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+      return 0;
     case WM_MOUSEWHEEL:
       onMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
       return 0;
+    case WM_KEYDOWN:
+      if (wParam == VK_ESCAPE && m_mode == CalendarViewMode::Day) {
+        SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(m_controlId, kBackToMonthCode), reinterpret_cast<LPARAM>(m_hwnd));
+        return 0;
+      }
+      break;
     case WM_ERASEBKGND:
       return 1; // no flicker
     default:
       return DefWindowProcW(hwnd, msg, wParam, lParam);
   }
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 void CalendarView::onSize(int, int) {
@@ -197,11 +249,39 @@ void CalendarView::onSize(int, int) {
 }
 
 void CalendarView::onMouseWheel(short delta) {
+  if (m_mode == CalendarViewMode::Day) {
+    if (delta > 0) moveSelectedDay(-1);
+    else if (delta < 0) moveSelectedDay(1);
+    return;
+  }
   if (delta > 0) prevMonth();
   else if (delta < 0) nextMonth();
 }
 
 void CalendarView::onLButtonDown(int x, int y) {
+  if (m_mode == CalendarViewMode::Day) {
+    if (ptInRect(m_layout.btnPrev, x, y)) {
+      moveSelectedDay(-1);
+      return;
+    }
+    if (ptInRect(m_layout.btnNext, x, y)) {
+      moveSelectedDay(1);
+      return;
+    }
+    if (m_layout.btnDecorToggle.right > m_layout.btnDecorToggle.left &&
+        ptInRect(m_layout.btnDecorToggle, x, y)) {
+      m_dayDecorations = !m_dayDecorations;
+      invalidate();
+      return;
+    }
+    if (ptInRect(m_layout.btnBack, x, y) || ptInRect(m_layout.title, x, y)) {
+      sendMonthChanged();
+      SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(m_controlId, kBackToMonthCode), reinterpret_cast<LPARAM>(m_hwnd));
+      return;
+    }
+    return;
+  }
+
   if (ptInRect(m_layout.btnPrev, x, y)) {
     prevMonth();
     return;
@@ -222,14 +302,105 @@ void CalendarView::onLButtonDown(int x, int y) {
 
   const int first = firstWeekdayMonday0(m_year, m_month);
   const int idx = row * 7 + col;
-  const int day = idx - first + 1;
+  int day = idx - first + 1;
   const int dim = daysInMonth(m_year, m_month);
-  if (day < 1 || day > dim) return;
+  if (day < 1 || day > dim) {
+    int newYear = m_year;
+    int newMonth = m_month;
+    int newDay = day;
+    if (day < 1) {
+      newMonth -= 1;
+      if (newMonth < 1) { newMonth = 12; --newYear; }
+      const int dimPrev = daysInMonth(newYear, newMonth);
+      newDay = dimPrev + day;
+    } else {
+      newMonth += 1;
+      if (newMonth > 12) { newMonth = 1; ++newYear; }
+      newDay = day - dim;
+    }
+    setSelectedDate(newYear, newMonth, newDay);
+    sendMonthChanged();
+    return;
+  }
 
   if (m_selectedDay != day) {
     m_selectedDay = day;
     sendSelectionChanged();
     invalidate();
+  }
+}
+
+void CalendarView::onLButtonDblClick(int x, int y) {
+  if (m_mode == CalendarViewMode::Month) {
+    if (!ptInRect(m_layout.grid, x, y)) return;
+    const int gx = x - m_layout.grid.left;
+    const int gy = y - m_layout.grid.top;
+    const int col = (m_layout.cellW > 0) ? (gx / m_layout.cellW) : 0;
+    const int row = (m_layout.cellH > 0) ? (gy / m_layout.cellH) : 0;
+    if (col < 0 || col > 6 || row < 0 || row > 5) return;
+    const int first = firstWeekdayMonday0(m_year, m_month);
+    const int idx = row * 7 + col;
+    int day = idx - first + 1;
+    const int dim = daysInMonth(m_year, m_month);
+    if (day < 1 || day > dim) {
+      int newYear = m_year;
+      int newMonth = m_month;
+      int newDay = day;
+      if (day < 1) {
+        newMonth -= 1;
+        if (newMonth < 1) { newMonth = 12; --newYear; }
+        const int dimPrev = daysInMonth(newYear, newMonth);
+        newDay = dimPrev + day;
+      } else {
+        newMonth += 1;
+        if (newMonth > 12) { newMonth = 1; ++newYear; }
+        newDay = day - dim;
+      }
+      setSelectedDate(newYear, newMonth, newDay);
+      sendMonthChanged();
+      SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(m_controlId, kOpenDayCode), reinterpret_cast<LPARAM>(m_hwnd));
+      return;
+    }
+    if (m_selectedDay != day) {
+      m_selectedDay = day;
+      sendSelectionChanged();
+    }
+    SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(m_controlId, kOpenDayCode), reinterpret_cast<LPARAM>(m_hwnd));
+    return;
+  }
+
+  if (m_mode != CalendarViewMode::Day) return;
+
+  // Hit test events
+  for (const auto& er : m_dayEventRects) {
+    if (ptInRect(er.rc, x, y)) {
+      m_dayClickNoteId = er.id;
+      SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(m_controlId, kDayEditCode), reinterpret_cast<LPARAM>(m_hwnd));
+      return;
+    }
+  }
+
+  // Add at clicked time
+  if (!ptInRect(m_layout.grid, x, y)) return;
+  const int gridTop = static_cast<int>(m_layout.grid.top);
+  const int gridBottom = static_cast<int>(m_layout.grid.bottom);
+  const int gridH = std::max<int>(1, gridBottom - gridTop);
+  const int yIn = std::clamp<int>(y - gridTop, 0, gridH);
+  const int minutes = std::clamp<int>((yIn * 1440) / gridH, 0, 1439);
+  m_dayClickMinutes = minutes;
+  SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(m_controlId, kDayAddCode), reinterpret_cast<LPARAM>(m_hwnd));
+}
+
+void CalendarView::onRButtonDown(int x, int y) {
+  if (m_mode != CalendarViewMode::Day) return;
+
+  // Hit test events (right-click -> delete)
+  for (const auto& er : m_dayEventRects) {
+    if (ptInRect(er.rc, x, y)) {
+      m_dayClickNoteId = er.id;
+      SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(m_controlId, kDayDeleteCode), reinterpret_cast<LPARAM>(m_hwnd));
+      return;
+    }
   }
 }
 
@@ -266,7 +437,7 @@ void CalendarView::recalcLayout() {
   const int z = m_zoomPercent;
   const int pad = scale(12, z);
   const int headerH = scale(kHeaderBaseH, z);
-  const int dowH = scale(kDowBaseH, z);
+  const int dowH = (m_mode == CalendarViewMode::Month) ? scale(kDowBaseH, z) : 0;
 
   m_layout.header = rc;
   m_layout.header.bottom = rc.top + headerH;
@@ -275,7 +446,24 @@ void CalendarView::recalcLayout() {
   m_layout.btnPrev = { rc.left + pad, rc.top + (headerH - btnSize) / 2, rc.left + pad + btnSize, rc.top + (headerH + btnSize) / 2 };
   m_layout.btnNext = { rc.right - pad - btnSize, rc.top + (headerH - btnSize) / 2, rc.right - pad, rc.top + (headerH + btnSize) / 2 };
 
-  m_layout.title = { m_layout.btnPrev.right + pad, rc.top, m_layout.btnNext.left - pad, rc.top + headerH };
+  if (m_mode == CalendarViewMode::Day) {
+    const int backW = scale(90, z);
+    m_layout.btnBack = { m_layout.btnPrev.right + pad, rc.top + (headerH - btnSize) / 2, m_layout.btnPrev.right + pad + backW, rc.top + (headerH + btnSize) / 2 };
+    const int toggleW = scale(150, z);
+    const int toggleLeft = m_layout.btnNext.left - pad - toggleW;
+    const int titleLeft = m_layout.btnBack.right + pad;
+    if (toggleLeft - titleLeft < scale(80, z)) {
+      m_layout.btnDecorToggle = { 0, 0, 0, 0 };
+      m_layout.title = { titleLeft, rc.top, m_layout.btnNext.left - pad, rc.top + headerH };
+    } else {
+      m_layout.btnDecorToggle = { toggleLeft, rc.top + (headerH - btnSize) / 2, toggleLeft + toggleW, rc.top + (headerH + btnSize) / 2 };
+      m_layout.title = { titleLeft, rc.top, m_layout.btnDecorToggle.left - pad, rc.top + headerH };
+    }
+  } else {
+    m_layout.btnBack = { 0, 0, 0, 0 };
+    m_layout.btnDecorToggle = { 0, 0, 0, 0 };
+    m_layout.title = { m_layout.btnPrev.right + pad, rc.top, m_layout.btnNext.left - pad, rc.top + headerH };
+  }
 
   m_layout.dowRow = { rc.left, m_layout.header.bottom, rc.right, m_layout.header.bottom + dowH };
   m_layout.grid = { rc.left, m_layout.dowRow.bottom, rc.right, rc.bottom };
@@ -313,6 +501,45 @@ std::wstring CalendarView::monthTitle() const {
   return monthNameRu(m_month) + L" " + std::to_wstring(m_year);
 }
 
+std::wstring CalendarView::dayTitle() const {
+  SYSTEMTIME st = selectedDateLocal();
+  wchar_t buf[64]{};
+  swprintf_s(buf, L"%02d.%02d.%04d", st.wDay, st.wMonth, st.wYear);
+  return buf;
+}
+
+void CalendarView::setSelectedDate(int year, int month, int day) {
+  if (month < 1) { month = 12; --year; }
+  if (month > 12) { month = 1; ++year; }
+  const int dim = daysInMonth(year, month);
+  day = std::clamp(day, 1, dim);
+  m_year = year;
+  m_month = month;
+  m_selectedDay = day;
+  sendSelectionChanged();
+  invalidate();
+}
+
+void CalendarView::moveSelectedDay(int deltaDays) {
+  SYSTEMTIME st = selectedDateLocal();
+  st.wHour = 0;
+  st.wMinute = 0;
+  st.wSecond = 0;
+  st.wMilliseconds = 0;
+  FILETIME ft{};
+  if (!SystemTimeToFileTime(&st, &ft)) return;
+  ULARGE_INTEGER u{};
+  u.LowPart = ft.dwLowDateTime;
+  u.HighPart = ft.dwHighDateTime;
+  const LONGLONG day100ns = 24LL * 60 * 60 * 10'000'000;
+  u.QuadPart = static_cast<ULONGLONG>(static_cast<LONGLONG>(u.QuadPart) + day100ns * deltaDays);
+  ft.dwLowDateTime = u.LowPart;
+  ft.dwHighDateTime = u.HighPart;
+  SYSTEMTIME out{};
+  if (!FileTimeToSystemTime(&ft, &out)) return;
+  setSelectedDate(out.wYear, out.wMonth, out.wDay);
+}
+
 void CalendarView::sendSelectionChanged() {
   if (!m_parent) return;
   SendMessageW(m_parent, WM_COMMAND, MAKEWPARAM(m_controlId, kSelCode), reinterpret_cast<LPARAM>(m_hwnd));
@@ -337,7 +564,7 @@ void CalendarView::onPaint() {
 
   // Background with subtle border
   fillRectColor(mem, rc, m_theme.windowBg);
-  
+
   // Header with gradient-like effect
   RECT headerBg = m_layout.header;
   fillRectColor(mem, headerBg, m_theme.headerBg);
@@ -351,154 +578,298 @@ void CalendarView::onPaint() {
   drawText(mem, L"◀", m_layout.btnPrev, DT_SINGLELINE | DT_CENTER | DT_VCENTER, m_theme.accent);
   drawText(mem, L"▶", m_layout.btnNext, DT_SINGLELINE | DT_CENTER | DT_VCENTER, m_theme.accent);
 
-  // Month title with larger font
+  if (m_mode == CalendarViewMode::Day) {
+    drawRoundRect(mem, m_layout.btnBack, btnRadius, m_theme.panelBg, m_theme.gridLine);
+    SelectObject(mem, m_fontSmall);
+    drawText(mem, L"К месяцу", m_layout.btnBack, DT_SINGLELINE | DT_CENTER | DT_VCENTER, m_theme.accent);
+
+    if (m_layout.btnDecorToggle.right > m_layout.btnDecorToggle.left) {
+      drawRoundRect(mem, m_layout.btnDecorToggle, btnRadius, m_theme.panelBg, m_theme.gridLine);
+      const std::wstring label = m_dayDecorations ? L"Без оформления" : L"С оформлением";
+      drawText(mem, label, m_layout.btnDecorToggle, DT_SINGLELINE | DT_CENTER | DT_VCENTER, m_theme.accent);
+    }
+  }
+
   SelectObject(mem, m_fontHeader);
-  drawText(mem, monthTitle(), m_layout.title, DT_SINGLELINE | DT_CENTER | DT_VCENTER, m_theme.text);
-
-  // Weekday row with subtle background
-  RECT dowBg = m_layout.dowRow;
-  fillRectColor(mem, dowBg, m_theme.headerBg);
-  
-  static const wchar_t* dows[] = { L"Пн", L"Вт", L"Ср", L"Чт", L"Пт", L"Сб", L"Вс" };
-  SelectObject(mem, m_fontSmall);
-  for (int c = 0; c < 7; ++c) {
-    RECT r = m_layout.dowRow;
-    r.left = m_layout.dowRow.left + c * m_layout.cellW;
-    r.right = (c == 6) ? m_layout.dowRow.right : (r.left + m_layout.cellW);
-    const COLORREF col = (c >= 5) ? m_theme.weekend : m_theme.mutedText;
-    drawText(mem, dows[c], r, DT_SINGLELINE | DT_CENTER | DT_VCENTER, col);
+  if (m_mode == CalendarViewMode::Month) {
+    drawText(mem, monthTitle(), m_layout.title, DT_SINGLELINE | DT_CENTER | DT_VCENTER, m_theme.text);
+  } else {
+    drawText(mem, dayTitle(), m_layout.title, DT_SINGLELINE | DT_CENTER | DT_VCENTER, m_theme.text);
   }
 
-  // Grid cells
-  const int first = firstWeekdayMonday0(m_year, m_month);
-  const int dim = daysInMonth(m_year, m_month);
+  if (m_mode == CalendarViewMode::Month) {
+    // Weekday row with subtle background
+    RECT dowBg = m_layout.dowRow;
+    fillRectColor(mem, dowBg, m_theme.headerBg);
 
-  SYSTEMTIME now{};
-  GetLocalTime(&now);
-  const bool isThisMonthNow = (now.wYear == m_year && now.wMonth == m_month);
-
-  // Grid background
-  fillRectColor(mem, m_layout.grid, m_theme.panelBg);
-
-  // Grid lines
-  HPEN pen = CreatePen(PS_SOLID, 1, m_theme.gridLine);
-  HGDIOBJ oldPen = SelectObject(mem, pen);
-
-  // Horizontal lines
-  for (int r = 0; r <= 6; ++r) {
-    const int y = m_layout.grid.top + r * m_layout.cellH;
-    MoveToEx(mem, m_layout.grid.left, y, nullptr);
-    LineTo(mem, m_layout.grid.right, y);
-  }
-  // Vertical lines
-  for (int c = 0; c <= 7; ++c) {
-    const int x = m_layout.grid.left + c * m_layout.cellW;
-    MoveToEx(mem, x, m_layout.grid.top, nullptr);
-    LineTo(mem, x, m_layout.grid.bottom);
-  }
-
-  SelectObject(mem, oldPen);
-  DeleteObject(pen);
-
-  SelectObject(mem, m_fontDay);
-  for (int idx = 0; idx < 42; ++idx) {
-    const int row = idx / 7;
-    const int col = idx % 7;
-    const int day = idx - first + 1;
-    if (day < 1 || day > dim) continue;
-
-    RECT cell{};
-    cell.left = m_layout.grid.left + col * m_layout.cellW;
-    cell.top = m_layout.grid.top + row * m_layout.cellH;
-    cell.right = (col == 6) ? m_layout.grid.right : (cell.left + m_layout.cellW);
-    cell.bottom = (row == 5) ? m_layout.grid.bottom : (cell.top + m_layout.cellH);
-
-    const bool selected = (day == m_selectedDay);
-    const bool today = isThisMonthNow && (day == now.wDay);
-    const bool weekend = (col >= 5);
-
-    // Selection background with rounded corners
-    if (selected) {
-      RECT inner = cell;
-      InflateRect(&inner, -scale(4, m_zoomPercent), -scale(4, m_zoomPercent));
-      drawRoundRect(mem, inner, scale(12, m_zoomPercent), m_theme.accentSoft, m_theme.accent);
+    static const wchar_t* dows[] = { L"Пн", L"Вт", L"Ср", L"Чт", L"Пт", L"Сб", L"Вс" };
+    SelectObject(mem, m_fontSmall);
+    for (int c = 0; c < 7; ++c) {
+      RECT r = m_layout.dowRow;
+      r.left = m_layout.dowRow.left + c * m_layout.cellW;
+      r.right = (c == 6) ? m_layout.dowRow.right : (r.left + m_layout.cellW);
+      const COLORREF col = (c >= 5) ? m_theme.weekend : m_theme.mutedText;
+      drawText(mem, dows[c], r, DT_SINGLELINE | DT_CENTER | DT_VCENTER, col);
     }
 
-    // Day number - centered at top
-    RECT num = cell;
-    num.left += scale(8, m_zoomPercent);
-    num.top += scale(6, m_zoomPercent);
-    num.right -= scale(8, m_zoomPercent);
-    num.bottom = num.top + scale(26, m_zoomPercent);
+    // Grid cells
+    const int first = firstWeekdayMonday0(m_year, m_month);
+    const int dim = daysInMonth(m_year, m_month);
 
-    COLORREF dayColor = weekend ? m_theme.weekend : m_theme.text;
-    if (selected) dayColor = m_theme.accent;
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    const bool isThisMonthNow = (now.wYear == m_year && now.wMonth == m_month);
 
-    drawText(mem, std::to_wstring(day), num, DT_SINGLELINE | DT_LEFT | DT_VCENTER, dayColor);
+    // Grid background
+    fillRectColor(mem, m_layout.grid, m_theme.panelBg);
 
-    // Today indicator - filled circle behind number
-    if (today && !selected) {
-      const int circleSize = scale(30, m_zoomPercent);
-      RECT ring{};
-      ring.left = num.left - scale(3, m_zoomPercent);
-      ring.top = num.top - scale(1, m_zoomPercent);
-      ring.right = ring.left + circleSize;
-      ring.bottom = ring.top + circleSize;
-      
-      HBRUSH todayBrush = CreateSolidBrush(m_theme.accent);
-      HGDIOBJ oldB = SelectObject(mem, todayBrush);
-      HPEN todayPen = CreatePen(PS_SOLID, 1, m_theme.accent);
-      HGDIOBJ oldP = SelectObject(mem, todayPen);
-      Ellipse(mem, ring.left, ring.top, ring.right, ring.bottom);
-      SelectObject(mem, oldB);
-      SelectObject(mem, oldP);
-      DeleteObject(todayBrush);
-      DeleteObject(todayPen);
-      
-      // Redraw day number in white on top of circle
-      drawText(mem, std::to_wstring(day), num, DT_SINGLELINE | DT_LEFT | DT_VCENTER, RGB(255, 255, 255));
+    // Grid lines
+    HPEN pen = CreatePen(PS_SOLID, 1, m_theme.gridLine);
+    HGDIOBJ oldPen = SelectObject(mem, pen);
+
+    // Horizontal lines
+    for (int r = 0; r <= 6; ++r) {
+      const int y = m_layout.grid.top + r * m_layout.cellH;
+      MoveToEx(mem, m_layout.grid.left, y, nullptr);
+      LineTo(mem, m_layout.grid.right, y);
+    }
+    // Vertical lines
+    for (int c = 0; c <= 7; ++c) {
+      const int x = m_layout.grid.left + c * m_layout.cellW;
+      MoveToEx(mem, x, m_layout.grid.top, nullptr);
+      LineTo(mem, x, m_layout.grid.bottom);
     }
 
-    // Event marker (badge + preview)
-    const CalendarDayMeta meta = (day >= 1 && day < static_cast<int>(m_dayMeta.size())) ? m_dayMeta[day] : CalendarDayMeta{};
-    const int count = meta.count;
-    if (count > 0) {
-      COLORREF badgeColor = m_theme.badgeNormal;
-      if (meta.maxImportance >= 2) badgeColor = m_theme.badgeUrgent;
-      else if (meta.maxImportance == 1) badgeColor = m_theme.badgeImportant;
+    SelectObject(mem, oldPen);
+    DeleteObject(pen);
 
-      // Badge in top-right corner
-      RECT badge{};
-      badge.right = cell.right - scale(6, m_zoomPercent);
-      badge.top = cell.top + scale(6, m_zoomPercent);
-      badge.left = badge.right - scale(22, m_zoomPercent);
-      badge.bottom = badge.top + scale(18, m_zoomPercent);
-
-      HBRUSH b = CreateSolidBrush(badgeColor);
-      HGDIOBJ oldB = SelectObject(mem, b);
-      HPEN p = CreatePen(PS_SOLID, 1, badgeColor);
-      HGDIOBJ oldP = SelectObject(mem, p);
-      RoundRect(mem, badge.left, badge.top, badge.right, badge.bottom, scale(9, m_zoomPercent), scale(9, m_zoomPercent));
-      SelectObject(mem, oldB);
-      SelectObject(mem, oldP);
-      DeleteObject(b);
-      DeleteObject(p);
-
-      SelectObject(mem, m_fontSmall);
-      drawText(mem, std::to_wstring(count), badge, DT_SINGLELINE | DT_CENTER | DT_VCENTER, RGB(255, 255, 255));
-      SelectObject(mem, m_fontDay);
-
-      // Preview text below the day number
-      if (!meta.preview.empty()) {
-        RECT pr = cell;
-        pr.left += scale(6, m_zoomPercent);
-        pr.right -= scale(6, m_zoomPercent);
-        pr.top = num.bottom + scale(2, m_zoomPercent);
-        pr.bottom = cell.bottom - scale(4, m_zoomPercent);
-        SelectObject(mem, m_fontSmall);
-        drawText(mem, meta.preview, pr, DT_WORDBREAK | DT_END_ELLIPSIS | DT_LEFT, m_theme.mutedText);
-        SelectObject(mem, m_fontDay);
+    const bool compact = (m_layout.cellH < scale(60, m_zoomPercent));
+    SelectObject(mem, compact ? m_fontSmall : m_fontDay);
+    for (int idx = 0; idx < 42; ++idx) {
+      const int row = idx / 7;
+      const int col = idx % 7;
+      int day = idx - first + 1;
+      bool otherMonth = false;
+      int displayDay = day;
+      if (day < 1) {
+        otherMonth = true;
+        int cellYear = m_year;
+        int cellMonth = m_month - 1;
+        if (cellMonth < 1) { cellMonth = 12; --cellYear; }
+        const int dimPrev = daysInMonth(cellYear, cellMonth);
+        displayDay = dimPrev + day;
+      } else if (day > dim) {
+        otherMonth = true;
+        int cellYear = m_year;
+        int cellMonth = m_month + 1;
+        if (cellMonth > 12) { cellMonth = 1; ++cellYear; }
+        displayDay = day - dim;
       }
+
+      RECT cell{};
+      cell.left = m_layout.grid.left + col * m_layout.cellW;
+      cell.top = m_layout.grid.top + row * m_layout.cellH;
+      cell.right = (col == 6) ? m_layout.grid.right : (cell.left + m_layout.cellW);
+      cell.bottom = (row == 5) ? m_layout.grid.bottom : (cell.top + m_layout.cellH);
+
+      const bool selected = (!otherMonth && day == m_selectedDay);
+      const bool today = (!otherMonth && isThisMonthNow && (day == now.wDay));
+      const bool weekend = (col >= 5);
+
+      if (otherMonth) {
+        fillRectColor(mem, cell, m_theme.headerBg);
+      }
+
+      // Selection background with rounded corners
+      if (selected) {
+        RECT inner = cell;
+        InflateRect(&inner, -scale(4, m_zoomPercent), -scale(4, m_zoomPercent));
+        drawRoundRect(mem, inner, scale(12, m_zoomPercent), m_theme.accentSoft, m_theme.accent);
+      }
+
+      // Day number in a visible label
+      RECT num = cell;
+      num.left += scale(6, m_zoomPercent);
+      num.top += scale(6, m_zoomPercent);
+      num.right = num.left + scale(32, m_zoomPercent);
+      num.bottom = num.top + scale(22, m_zoomPercent);
+
+      COLORREF labelBg = m_theme.headerBg;
+      COLORREF labelBorder = m_theme.gridLine;
+      COLORREF dayColor = weekend ? m_theme.weekend : m_theme.text;
+      if (otherMonth) {
+        labelBg = m_theme.panelBg;
+        labelBorder = m_theme.gridLine;
+        dayColor = m_theme.mutedText;
+      }
+      if (today && !selected) {
+        labelBg = m_theme.accentSoft;
+        labelBorder = m_theme.accent;
+        dayColor = m_theme.accent;
+      }
+      if (selected) {
+        labelBg = m_theme.accent;
+        labelBorder = m_theme.accent;
+        dayColor = RGB(255, 255, 255);
+      }
+
+      drawRoundRect(mem, num, scale(6, m_zoomPercent), labelBg, labelBorder);
+      drawText(mem, std::to_wstring(displayDay), num, DT_SINGLELINE | DT_CENTER | DT_VCENTER, dayColor);
+
+      if (compact || otherMonth) continue;
+
+      // Event marker (badge + preview)
+      const CalendarDayMeta meta = (day >= 1 && day < static_cast<int>(m_dayMeta.size())) ? m_dayMeta[day] : CalendarDayMeta{};
+      const int count = meta.count;
+      if (count > 0) {
+        COLORREF badgeColor = m_theme.badgeNormal;
+        if (meta.maxImportance >= 2) badgeColor = m_theme.badgeUrgent;
+        else if (meta.maxImportance == 1) badgeColor = m_theme.badgeImportant;
+
+        // Badge in top-right corner
+        RECT badge{};
+        badge.right = cell.right - scale(6, m_zoomPercent);
+        badge.top = cell.top + scale(6, m_zoomPercent);
+        badge.left = badge.right - scale(22, m_zoomPercent);
+        badge.bottom = badge.top + scale(18, m_zoomPercent);
+
+        HBRUSH b = CreateSolidBrush(badgeColor);
+        HGDIOBJ oldB = SelectObject(mem, b);
+        HPEN p = CreatePen(PS_SOLID, 1, badgeColor);
+        HGDIOBJ oldP = SelectObject(mem, p);
+        RoundRect(mem, badge.left, badge.top, badge.right, badge.bottom, scale(9, m_zoomPercent), scale(9, m_zoomPercent));
+        SelectObject(mem, oldB);
+        SelectObject(mem, oldP);
+        DeleteObject(b);
+        DeleteObject(p);
+
+        SelectObject(mem, m_fontSmall);
+        drawText(mem, std::to_wstring(count), badge, DT_SINGLELINE | DT_CENTER | DT_VCENTER, RGB(255, 255, 255));
+        SelectObject(mem, m_fontDay);
+
+        // Importance markers (dots) under the badge
+        std::array<COLORREF, 3> dots{};
+        int dotCount = 0;
+        if (meta.hasUrgent) dots[dotCount++] = m_theme.badgeUrgent;
+        if (meta.hasImportant) dots[dotCount++] = m_theme.badgeImportant;
+        if (meta.hasNormal) dots[dotCount++] = m_theme.badgeNormal;
+        if (dotCount > 0) {
+          const int radius = scale(3, m_zoomPercent);
+          const int gap = scale(2, m_zoomPercent);
+          const int diameter = radius * 2;
+          const int totalW = dotCount * diameter + (dotCount - 1) * gap;
+          int x = badge.right - totalW;
+          int y = badge.bottom + scale(6, m_zoomPercent);
+          const int maxY = cell.bottom - scale(6, m_zoomPercent) - radius;
+          if (y > maxY) y = maxY;
+          for (int di = 0; di < dotCount; ++di) {
+            drawDot(mem, x + radius, y + radius, radius, dots[di], dots[di]);
+            x += diameter + gap;
+          }
+        }
+
+        // Preview text below the day number
+        if (!meta.preview.empty()) {
+          RECT pr = cell;
+          pr.left += scale(6, m_zoomPercent);
+          pr.right -= scale(6, m_zoomPercent);
+          pr.top = num.bottom + scale(2, m_zoomPercent);
+          pr.bottom = cell.bottom - scale(4, m_zoomPercent);
+          SelectObject(mem, m_fontSmall);
+          drawText(mem, meta.preview, pr, DT_WORDBREAK | DT_END_ELLIPSIS | DT_LEFT, m_theme.mutedText);
+          SelectObject(mem, m_fontDay);
+        }
+      }
+    }
+  } else {
+    // Day view
+    fillRectColor(mem, m_layout.grid, m_theme.panelBg);
+    const int timeColW = scale(60, m_zoomPercent);
+    RECT timeCol = m_layout.grid;
+    timeCol.right = timeCol.left + timeColW;
+    fillRectColor(mem, timeCol, m_theme.headerBg);
+
+    RECT grid = m_layout.grid;
+    grid.left = timeCol.right;
+    const int gridTop = static_cast<int>(grid.top);
+    const int gridBottom = static_cast<int>(grid.bottom);
+    const int gridH = std::max<int>(1, gridBottom - gridTop);
+
+    HPEN pen = CreatePen(PS_SOLID, 1, m_theme.gridLine);
+    HGDIOBJ oldPen = SelectObject(mem, pen);
+    for (int h = 0; h <= 24; ++h) {
+      const int y = gridTop + (gridH * h) / 24;
+      MoveToEx(mem, grid.left, y, nullptr);
+      LineTo(mem, grid.right, y);
+      MoveToEx(mem, timeCol.left, y, nullptr);
+      LineTo(mem, timeCol.right, y);
+    }
+    SelectObject(mem, oldPen);
+    DeleteObject(pen);
+
+    SelectObject(mem, m_fontSmall);
+    for (int h = 0; h < 24; ++h) {
+      RECT tr = timeCol;
+      tr.top = gridTop + (gridH * h) / 24;
+      tr.bottom = gridTop + (gridH * (h + 1)) / 24;
+      wchar_t buf[8]{};
+      swprintf_s(buf, L"%02d:00", h);
+      drawText(mem, buf, tr, DT_SINGLELINE | DT_RIGHT | DT_VCENTER, m_theme.mutedText);
+    }
+
+    // Day events
+    m_dayEventRects.clear();
+    const int pad = scale(4, m_zoomPercent);
+    const int minH = scale(18, m_zoomPercent);
+    const int gap = scale(2, m_zoomPercent);
+    int lastBottom = gridTop - gap;
+    for (const auto& n : m_dayNotes) {
+      const SYSTEMTIME st = TimeUtils::unixMsToSystemTimeLocal(n.scheduledAtUtcMs);
+      const int minutes = st.wHour * 60 + st.wMinute;
+      const int y = gridTop + (gridH * minutes) / 1440;
+      const int h = m_dayDecorations ? std::max(minH, (gridH * 30) / 1440) : minH;
+      RECT er{};
+      er.left = grid.left + pad;
+      er.right = grid.right - pad;
+      er.top = y;
+      if (er.top < (lastBottom + gap)) {
+        er.top = lastBottom + gap;
+      }
+      er.bottom = std::min<int>(gridBottom, er.top + h);
+
+      COLORREF fill = m_theme.accentSoft;
+      COLORREF border = m_theme.accent;
+      if (n.importance >= 2) { fill = RGB(254, 226, 226); border = m_theme.badgeUrgent; }
+      else if (n.importance == 1) { fill = RGB(254, 240, 211); border = m_theme.badgeImportant; }
+      const COLORREF imp = importanceColor(n.importance, m_theme);
+
+      if (m_dayDecorations) {
+        drawRoundRect(mem, er, scale(6, m_zoomPercent), fill, border);
+      } else {
+        RECT line = er;
+        line.right = std::min<int>(line.left + scale(3, m_zoomPercent), line.right);
+        fillRectColor(mem, line, border);
+      }
+
+      // Importance marker at the beginning of the note
+      const int dotRadius = scale(3, m_zoomPercent);
+      const int erTop = static_cast<int>(er.top);
+      const int erBottom = static_cast<int>(er.bottom);
+      const int dotX = static_cast<int>(er.left) + scale(6, m_zoomPercent) + dotRadius;
+      const int boxH = erBottom - erTop;
+      const int dotY = erTop + std::max<int>(0, (boxH - dotRadius * 2) / 2) + dotRadius;
+      drawDot(mem, dotX, dotY, dotRadius, imp, imp);
+
+      wchar_t timeBuf[16]{};
+      swprintf_s(timeBuf, L"%02d:%02d", st.wHour, st.wMinute);
+      std::wstring title = n.title.empty() ? L"(без названия)" : n.title;
+      std::wstring text = timeBuf + std::wstring(L"  ") + title;
+      RECT tx = er;
+      tx.left += scale(6, m_zoomPercent) + dotRadius * 2 + scale(6, m_zoomPercent);
+      drawText(mem, text, tx, DT_SINGLELINE | DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS, m_theme.text);
+
+      m_dayEventRects.push_back({ er, n.id });
+      lastBottom = er.bottom;
     }
   }
 

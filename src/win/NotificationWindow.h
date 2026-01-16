@@ -26,6 +26,7 @@ private:
   void showSnoozeMenu();
   void snoozeMinutes(int minutes);
   void layout(int width, int height);
+  int desiredHeightForWidth(int width);
 
   void updateCountdownUi();
   void positionBottomRight();
@@ -46,6 +47,7 @@ private:
   HFONT m_fontTitle{};
 
   IRichEditOleCallback* m_oleCb{}; // owned, released in onDestroy
+  HICON m_appIcon{};
 
   UINT_PTR m_timerId{};
   int m_totalMs = 0;

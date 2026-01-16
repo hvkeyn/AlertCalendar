@@ -33,6 +33,8 @@ set(APP_SOURCES
 
   src/win/CalendarView.cpp
   src/win/CalendarView.h
+  src/win/AppIcon.cpp
+  src/win/AppIcon.h
   src/win/MainWindow.cpp
   src/win/MainWindow.h
   src/win/NotificationWindow.cpp

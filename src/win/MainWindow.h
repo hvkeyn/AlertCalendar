@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "win/UiTheme.h"
@@ -30,7 +31,7 @@ private:
   void onDestroy();
   void onSize(int width, int height);
   void onCommand(int id);
-  void onNotify(NMHDR* hdr);
+  LRESULT onNotify(NMHDR* hdr);
   void onHScroll(HWND src);
   LRESULT onCtlColorStatic(HDC hdc, HWND hwndCtl);
   LRESULT onCtlColorEdit(HDC hdc, HWND hwndCtl);
@@ -56,6 +57,14 @@ private:
   void playSoundForImportance(int importance, bool showErrors);
   void showNotificationPreviewPopup();
   void updateNotificationPreview();
+  void updateRepeatUi();
+  int repeatMaskFromUi() const;
+  void setRepeatMaskUi(int mask);
+  int defaultRepeatMaskForSelectedDate() const;
+  LRESULT onDrawItem(DRAWITEMSTRUCT* dis);
+  void registerButtonStyle(HWND hwnd, int style);
+  void updateSaveButtonState();
+  void setEditorVisible(bool visible);
   void markEditorDirty();
   void scheduleAutosave();
   void flushAutosave();
@@ -81,7 +90,13 @@ private:
   HWND m_lblImportance{};
 
   // Editor (right panel)
+  struct ListNoteMeta {
+    int64_t scheduledAtUtcMs = 0;
+    int importance = 0;
+  };
   std::vector<std::wstring> m_listNoteIds;
+  std::vector<ListNoteMeta> m_listNoteMeta;
+  bool m_listIsToday = false;
   std::optional<Note> m_currentNote;
   bool m_loadingEditor = false;
   bool m_refreshingList = false;
@@ -95,11 +110,22 @@ private:
   HWND m_comboCategory{};
   HWND m_lblReminder{};
   HWND m_comboReminder{};
+  HWND m_lblRepeat{};
+  HWND m_comboRepeat{};
+  HWND m_lblRepeatDays{};
+  HWND m_chkRepeatMon{};
+  HWND m_chkRepeatTue{};
+  HWND m_chkRepeatWed{};
+  HWND m_chkRepeatThu{};
+  HWND m_chkRepeatFri{};
+  HWND m_chkRepeatSat{};
+  HWND m_chkRepeatSun{};
   HWND m_chkAutoHide{};
   HWND m_editAutoHideSeconds{};
   HWND m_spinAutoHideSeconds{};
   HWND m_btnSave{};
   HWND m_btnDelete{};
+  HWND m_btnCloseEditor{};
   HWND m_chkPreview{};
   // Preview (notification mock)
   HWND m_previewLabel{};
@@ -150,6 +176,10 @@ private:
   bool m_trayAdded = false;
   HMENU m_trayMenu = nullptr;
   bool m_isQuitting = false;
+  bool m_editorVisible = false;
+  HICON m_appIconLarge{};
+  HICON m_appIconSmall{};
+  std::unordered_map<HWND, int> m_buttonStyles;
 };
 
 

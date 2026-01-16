@@ -7,6 +7,7 @@
 #include "win/RichEditOleCallback.h"
 #include "win/MarkupConvert.h"
 #include "win/WinUtil.h"
+#include "win/AppIcon.h"
 
 #include <commctrl.h>
 #include <ole2.h>
@@ -25,7 +26,15 @@ constexpr int IDM_SNOOZE_15 = 50115;
 constexpr int IDM_SNOOZE_30 = 50130;
 constexpr int IDM_SNOOZE_60 = 50160;
 constexpr int IDM_SNOOZE_120 = 50220;
+constexpr int IDM_SNOOZE_180 = 50703;
 constexpr int IDM_SNOOZE_240 = 50340;
+constexpr int IDM_SNOOZE_300 = 50705;
+constexpr int IDM_SNOOZE_360 = 50706;
+constexpr int IDM_SNOOZE_420 = 50707;
+constexpr int IDM_SNOOZE_480 = 50708;
+constexpr int IDM_SNOOZE_540 = 50709;
+constexpr int IDM_SNOOZE_600 = 50710;
+constexpr int IDM_SNOOZE_660 = 50711;
 constexpr int IDM_SNOOZE_1DAY = 50500;
 constexpr int IDM_SNOOZE_1WEEK = 50600;
 
@@ -126,7 +135,19 @@ void NotificationWindow::show() {
   }
 
   positionBottomRight();
-  ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
+  if (m_previewOnly) {
+    ShowWindow(m_hwnd, SW_SHOWNOACTIVATE);
+  } else {
+    ShowWindow(m_hwnd, SW_SHOWNORMAL);
+    SetForegroundWindow(m_hwnd);
+    FLASHWINFO fwi{};
+    fwi.cbSize = sizeof(fwi);
+    fwi.hwnd = m_hwnd;
+    fwi.dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG;
+    fwi.uCount = 3;
+    fwi.dwTimeout = 0;
+    FlashWindowEx(&fwi);
+  }
   UpdateWindow(m_hwnd);
 }
 
@@ -213,8 +234,32 @@ LRESULT NotificationWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case IDM_SNOOZE_120:
           snoozeMinutes(120);
           return 0;
+        case IDM_SNOOZE_180:
+          snoozeMinutes(180);
+          return 0;
         case IDM_SNOOZE_240:
           snoozeMinutes(240);
+          return 0;
+        case IDM_SNOOZE_300:
+          snoozeMinutes(300);
+          return 0;
+        case IDM_SNOOZE_360:
+          snoozeMinutes(360);
+          return 0;
+        case IDM_SNOOZE_420:
+          snoozeMinutes(420);
+          return 0;
+        case IDM_SNOOZE_480:
+          snoozeMinutes(480);
+          return 0;
+        case IDM_SNOOZE_540:
+          snoozeMinutes(540);
+          return 0;
+        case IDM_SNOOZE_600:
+          snoozeMinutes(600);
+          return 0;
+        case IDM_SNOOZE_660:
+          snoozeMinutes(660);
           return 0;
         case IDM_SNOOZE_1DAY:
           snoozeMinutes(24 * 60);
@@ -257,6 +302,15 @@ void NotificationWindow::onCreate() {
     m_bgBrush = nullptr;
   }
   m_bgBrush = CreateSolidBrush(m_theme.windowBg);
+
+  if (m_appIcon) {
+    DestroyIcon(m_appIcon);
+    m_appIcon = nullptr;
+  }
+  m_appIcon = AppIcon::createIcon(32, m_theme.style);
+  if (m_appIcon) {
+    SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(m_appIcon));
+  }
 
   // Create fonts
   m_font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
@@ -394,6 +448,10 @@ void NotificationWindow::onDestroy() {
     m_oleCb->Release();
     m_oleCb = nullptr;
   }
+  if (m_appIcon) {
+    DestroyIcon(m_appIcon);
+    m_appIcon = nullptr;
+  }
 }
 
 void NotificationWindow::onTimer() {
@@ -430,7 +488,15 @@ void NotificationWindow::showSnoozeMenu() {
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, IDM_SNOOZE_60, L"1 час");
   AppendMenuW(menu, MF_STRING, IDM_SNOOZE_120, L"2 часа");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_180, L"3 часа");
   AppendMenuW(menu, MF_STRING, IDM_SNOOZE_240, L"4 часа");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_300, L"5 часов");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_360, L"6 часов");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_420, L"7 часов");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_480, L"8 часов");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_540, L"9 часов");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_600, L"10 часов");
+  AppendMenuW(menu, MF_STRING, IDM_SNOOZE_660, L"11 часов");
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, IDM_SNOOZE_1DAY, L"1 день");
   AppendMenuW(menu, MF_STRING, IDM_SNOOZE_1WEEK, L"1 неделя");
@@ -530,6 +596,54 @@ void NotificationWindow::layout(int width, int height) {
   }
 }
 
+int NotificationWindow::desiredHeightForWidth(int width) {
+  const int zoom = AppSettings::uiZoomPercent();
+  auto sx = [&](int px) { return MulDiv(px, zoom, 100); };
+
+  const int margin = sx(12);
+  const int top = sx(10);
+  const int titleH = sx(22);
+  const int richTop = top + titleH + sx(10);
+  const int bottomPad = margin;
+  const int progressH = m_note.autoHideEnabled ? sx(10) : 0;
+  const int labelH = m_note.autoHideEnabled ? sx(18) : 0;
+  const int gapTop = m_note.autoHideEnabled ? sx(8) : 0;
+  const int gapLabel = m_note.autoHideEnabled ? sx(4) : 0;
+
+  const int richMin = sx(80);
+  const int richW = std::max(120, width - margin * 2);
+
+  if (m_rich) {
+    MoveWindow(m_rich, margin, richTop, richW, sx(800), TRUE);
+  }
+
+  int richH = richMin;
+  if (m_rich) {
+    const int len = GetWindowTextLengthW(m_rich);
+    if (len > 0) {
+      const int last = std::max(0, len - 1);
+      const LRESULT pos = SendMessageW(m_rich, EM_POSFROMCHAR, last, 0);
+      int y = static_cast<int>(HIWORD(pos));
+      if (y < 0) y = 0;
+
+      HDC hdc = GetDC(m_rich);
+      TEXTMETRICW tm{};
+      if (hdc) {
+        GetTextMetricsW(hdc, &tm);
+        ReleaseDC(m_rich, hdc);
+      }
+      const int lineH = std::max(14, static_cast<int>(tm.tmHeight + tm.tmExternalLeading));
+      richH = std::max(richMin, y + lineH + sx(12));
+    }
+  }
+
+  int total = richTop + richH + bottomPad;
+  if (m_note.autoHideEnabled) {
+    total += gapTop + progressH + gapLabel + labelH;
+  }
+  return total;
+}
+
 void NotificationWindow::positionBottomRight() {
   RECT rc{};
   SystemParametersInfoW(SPI_GETWORKAREA, 0, &rc, 0);
@@ -537,13 +651,22 @@ void NotificationWindow::positionBottomRight() {
   const int zoom = AppSettings::uiZoomPercent();
   auto sx = [&](int px) { return MulDiv(px, zoom, 100); };
 
-  // Centered notification (as requested). Size scales with UI zoom.
-  const int w = sx(640);
-  const int h = sx(480);
+  // Centered notification. Height adapts to content.
+  const int w = sx(560);
+  int h = desiredHeightForWidth(w);
+  const int minH = sx(220);
+  const int workH = static_cast<int>(rc.bottom - rc.top) - sx(40);
+  const int maxH = std::max<int>(minH, workH);
+  if (h < minH) h = minH;
+  if (h > maxH) h = maxH;
   const int cx = rc.left + ((rc.right - rc.left) - w) / 2;
   const int cy = rc.top + ((rc.bottom - rc.top) - h) / 2;
 
-  SetWindowPos(m_hwnd, HWND_TOPMOST, cx, cy, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  UINT flags = SWP_SHOWWINDOW;
+  if (m_previewOnly) {
+    flags |= SWP_NOACTIVATE;
+  }
+  SetWindowPos(m_hwnd, HWND_TOPMOST, cx, cy, w, h, flags);
 }
 
 

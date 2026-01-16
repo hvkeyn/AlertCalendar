@@ -134,6 +134,8 @@ bool readMeta(const std::wstring& id, Note& out, std::wstring* errorOut) {
   out.importance = getI("importance", 0);
   out.category = getI("category", 0);
   out.reminderMinutesBefore = getI("reminderMinutesBefore", 0);
+  out.repeatType = static_cast<RepeatType>(std::clamp(getI("repeatType", 0), 0, 2));
+  out.repeatWeekdaysMask = getI("repeatWeekdaysMask", 0);
   out.contentMode = static_cast<NoteContentMode>(getI("contentMode", 0));
   out.autoHideEnabled = getI("autoHideEnabled", 0) != 0;
   out.autoHideSeconds = getI("autoHideSeconds", 0);
@@ -185,6 +187,8 @@ bool writeMeta(const Note& n, std::wstring* errorOut) {
   ss << "importance=" << n.importance << "\n";
   ss << "category=" << n.category << "\n";
   ss << "reminderMinutesBefore=" << n.reminderMinutesBefore << "\n";
+  ss << "repeatType=" << static_cast<int>(n.repeatType) << "\n";
+  ss << "repeatWeekdaysMask=" << n.repeatWeekdaysMask << "\n";
   ss << "contentMode=" << static_cast<int>(n.contentMode) << "\n";
   ss << "autoHideEnabled=" << (n.autoHideEnabled ? 1 : 0) << "\n";
   ss << "autoHideSeconds=" << n.autoHideSeconds << "\n";
@@ -230,6 +234,161 @@ bool writeMeta(const Note& n, std::wstring* errorOut) {
 
 bool isSameLocalDate(const SYSTEMTIME& a, const SYSTEMTIME& b) {
   return a.wYear == b.wYear && a.wMonth == b.wMonth && a.wDay == b.wDay;
+}
+
+int compareLocalDate(const SYSTEMTIME& a, const SYSTEMTIME& b) {
+  if (a.wYear != b.wYear) return (a.wYear < b.wYear) ? -1 : 1;
+  if (a.wMonth != b.wMonth) return (a.wMonth < b.wMonth) ? -1 : 1;
+  if (a.wDay != b.wDay) return (a.wDay < b.wDay) ? -1 : 1;
+  return 0;
+}
+
+bool isOnOrAfterLocalDate(const SYSTEMTIME& a, const SYSTEMTIME& b) {
+  return compareLocalDate(a, b) >= 0;
+}
+
+SYSTEMTIME normalizeLocalDate(SYSTEMTIME d) {
+  d.wHour = 0;
+  d.wMinute = 0;
+  d.wSecond = 0;
+  d.wMilliseconds = 0;
+  FILETIME ft{};
+  if (SystemTimeToFileTime(&d, &ft)) {
+    SYSTEMTIME out{};
+    if (FileTimeToSystemTime(&ft, &out)) {
+      return out;
+    }
+  }
+  return d;
+}
+
+SYSTEMTIME addDaysLocalDate(SYSTEMTIME d, int deltaDays) {
+  d = normalizeLocalDate(d);
+  FILETIME ft{};
+  if (!SystemTimeToFileTime(&d, &ft)) return d;
+  ULARGE_INTEGER u{};
+  u.LowPart = ft.dwLowDateTime;
+  u.HighPart = ft.dwHighDateTime;
+  const LONGLONG day100ns = 24LL * 60 * 60 * 10'000'000;
+  u.QuadPart = static_cast<ULONGLONG>(static_cast<LONGLONG>(u.QuadPart) + day100ns * deltaDays);
+  ft.dwLowDateTime = u.LowPart;
+  ft.dwHighDateTime = u.HighPart;
+  SYSTEMTIME out{};
+  if (FileTimeToSystemTime(&ft, &out)) {
+    return out;
+  }
+  return d;
+}
+
+int weekdayMaskFromWDayOfWeek(WORD dow) {
+  switch (dow) {
+    case 1: return kRepeatDayMon;
+    case 2: return kRepeatDayTue;
+    case 3: return kRepeatDayWed;
+    case 4: return kRepeatDayThu;
+    case 5: return kRepeatDayFri;
+    case 6: return kRepeatDaySat;
+    case 0: return kRepeatDaySun;
+    default: return 0;
+  }
+}
+
+int effectiveWeeklyMask(const Note& n, const SYSTEMTIME& startLocal) {
+  if (n.repeatWeekdaysMask != 0) return n.repeatWeekdaysMask;
+  return weekdayMaskFromWDayOfWeek(startLocal.wDayOfWeek);
+}
+
+SYSTEMTIME withStartTime(const SYSTEMTIME& date, const SYSTEMTIME& startLocal) {
+  SYSTEMTIME out = date;
+  out.wHour = startLocal.wHour;
+  out.wMinute = startLocal.wMinute;
+  out.wSecond = 0;
+  out.wMilliseconds = 0;
+  return out;
+}
+
+bool occurrenceOnDateLocal(const Note& n, const SYSTEMTIME& localDate, int64_t* outUtcMs) {
+  if (n.scheduledAtUtcMs == 0) return false;
+  const SYSTEMTIME startLocal = TimeUtils::unixMsToSystemTimeLocal(n.scheduledAtUtcMs);
+  SYSTEMTIME date = normalizeLocalDate(localDate);
+  const SYSTEMTIME startDate = normalizeLocalDate(startLocal);
+
+  if (!isOnOrAfterLocalDate(date, startDate)) return false;
+
+  if (n.repeatType == RepeatType::None) {
+    if (!isSameLocalDate(date, startDate)) return false;
+  } else if (n.repeatType == RepeatType::Weekly) {
+    const int mask = effectiveWeeklyMask(n, startLocal);
+    const int dayMask = weekdayMaskFromWDayOfWeek(date.wDayOfWeek);
+    if ((mask & dayMask) == 0) return false;
+  } else if (n.repeatType != RepeatType::Daily) {
+    return false;
+  }
+
+  const SYSTEMTIME occLocal = withStartTime(date, startLocal);
+  if (outUtcMs) {
+    *outUtcMs = TimeUtils::localSystemTimeToUnixMsUtc(occLocal);
+  }
+  return true;
+}
+
+bool nextOccurrenceOnOrAfterNowDate(const Note& n, int64_t nowUtcMs, int64_t* outUtcMs) {
+  if (n.scheduledAtUtcMs == 0) return false;
+
+  const SYSTEMTIME startLocal = TimeUtils::unixMsToSystemTimeLocal(n.scheduledAtUtcMs);
+  const SYSTEMTIME startDate = normalizeLocalDate(startLocal);
+  SYSTEMTIME nowLocal = TimeUtils::unixMsToSystemTimeLocal(nowUtcMs);
+  SYSTEMTIME nowDate = normalizeLocalDate(nowLocal);
+
+  if (n.repeatType == RepeatType::Daily) {
+    SYSTEMTIME candidate = isOnOrAfterLocalDate(nowDate, startDate) ? nowDate : startDate;
+    SYSTEMTIME occLocal = withStartTime(candidate, startLocal);
+    int64_t occUtc = TimeUtils::localSystemTimeToUnixMsUtc(occLocal);
+    if (occUtc < nowUtcMs) {
+      candidate = addDaysLocalDate(candidate, 1);
+      occLocal = withStartTime(candidate, startLocal);
+      occUtc = TimeUtils::localSystemTimeToUnixMsUtc(occLocal);
+    }
+    if (outUtcMs) *outUtcMs = occUtc;
+    return true;
+  }
+
+  if (n.repeatType == RepeatType::Weekly) {
+    const int mask = effectiveWeeklyMask(n, startLocal);
+    SYSTEMTIME base = isOnOrAfterLocalDate(nowDate, startDate) ? nowDate : startDate;
+    for (int ahead = 0; ahead < 14; ++ahead) {
+      SYSTEMTIME date = addDaysLocalDate(base, ahead);
+      if (!isOnOrAfterLocalDate(date, startDate)) continue;
+      const int dayMask = weekdayMaskFromWDayOfWeek(date.wDayOfWeek);
+      if ((mask & dayMask) == 0) continue;
+      const SYSTEMTIME occLocal = withStartTime(date, startLocal);
+      const int64_t occUtc = TimeUtils::localSystemTimeToUnixMsUtc(occLocal);
+      if (occUtc < nowUtcMs) continue;
+      if (outUtcMs) *outUtcMs = occUtc;
+      return true;
+    }
+    return false;
+  }
+
+  if (n.repeatType == RepeatType::None) {
+    if (!occurrenceOnDateLocal(n, nowDate, outUtcMs)) return false;
+    return true;
+  }
+
+  return false;
+}
+
+bool isLeapYear(int year) {
+  if (year % 400 == 0) return true;
+  if (year % 100 == 0) return false;
+  return (year % 4) == 0;
+}
+
+int daysInMonth(int year, int month) {
+  static const int kDays[] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+  if (month < 1 || month > 12) return 30;
+  if (month == 2 && isLeapYear(year)) return 29;
+  return kDays[month - 1];
 }
 } // namespace
 
@@ -301,8 +460,9 @@ std::vector<Note> NoteRepository::listForDate(const SYSTEMTIME& localDate, std::
         continue;
       }
 
-      const SYSTEMTIME stLocal = TimeUtils::unixMsToSystemTimeLocal(n.scheduledAtUtcMs);
-      if (isSameLocalDate(stLocal, localDate)) {
+      int64_t occUtc = 0;
+      if (occurrenceOnDateLocal(n, localDate, &occUtc)) {
+        n.scheduledAtUtcMs = occUtc;
         out.push_back(std::move(n));
       }
     }
@@ -329,7 +489,31 @@ std::array<CalendarDayMeta, 32> NoteRepository::monthMeta(int year, int month, s
     std::array<int64_t, 32> earliest{};
     earliest.fill(0);
 
+    auto applyMeta = [&](int day, const Note& n, int64_t occUtc) {
+      if (day < 1 || day > 31) return;
+      auto& d = meta[day];
+      d.count += 1;
+      d.maxImportance = std::max(d.maxImportance, n.importance);
+      if (n.importance >= 2) d.hasUrgent = true;
+      else if (n.importance == 1) d.hasImportant = true;
+      else d.hasNormal = true;
+
+      const int64_t prev = earliest[day];
+      if (prev == 0 || occUtc < prev) {
+        earliest[day] = occUtc;
+        const SYSTEMTIME occLocal = TimeUtils::unixMsToSystemTimeLocal(occUtc);
+        const std::wstring time = WinUtil::formatHHMM(occLocal);
+        std::wstring title = n.title.empty() ? L"(без названия)" : n.title;
+        if (title.size() > 22) {
+          title.resize(22);
+          title += L"…";
+        }
+        d.preview = time + L" " + title;
+      }
+    };
+
     const fs::path root = AppPaths::notesRootDir();
+    const int dim = daysInMonth(year, month);
     for (const auto& entry : fs::directory_iterator(root)) {
       if (!entry.is_directory()) continue;
       const std::wstring id = entry.path().filename().wstring();
@@ -340,26 +524,25 @@ std::array<CalendarDayMeta, 32> NoteRepository::monthMeta(int year, int month, s
       }
 
       if (n.scheduledAtUtcMs == 0) continue;
-      const SYSTEMTIME stLocal = TimeUtils::unixMsToSystemTimeLocal(n.scheduledAtUtcMs);
-      if (stLocal.wYear != year || stLocal.wMonth != month) continue;
-      if (stLocal.wDay < 1 || stLocal.wDay > 31) continue;
 
-      auto& d = meta[stLocal.wDay];
-      d.count += 1;
-      d.maxImportance = std::max(d.maxImportance, n.importance);
+      if (n.repeatType == RepeatType::None) {
+        const SYSTEMTIME stLocal = TimeUtils::unixMsToSystemTimeLocal(n.scheduledAtUtcMs);
+        if (stLocal.wYear != year || stLocal.wMonth != month) continue;
+        if (stLocal.wDay < 1 || stLocal.wDay > 31) continue;
+        applyMeta(stLocal.wDay, n, n.scheduledAtUtcMs);
+        continue;
+      }
 
-      // Preview: earliest scheduled time + title
-      const int64_t prev = earliest[stLocal.wDay];
-      if (prev == 0 || n.scheduledAtUtcMs < prev) {
-        earliest[stLocal.wDay] = n.scheduledAtUtcMs;
-        const std::wstring time = WinUtil::formatHHMM(stLocal);
-        std::wstring title = n.title.empty() ? L"(без названия)" : n.title;
-        // truncate a bit for cell
-        if (title.size() > 22) {
-          title.resize(22);
-          title += L"…";
-        }
-        d.preview = time + L" " + title;
+      for (int day = 1; day <= dim; ++day) {
+        SYSTEMTIME date{};
+        date.wYear = static_cast<WORD>(year);
+        date.wMonth = static_cast<WORD>(month);
+        date.wDay = static_cast<WORD>(day);
+        date = normalizeLocalDate(date);
+
+        int64_t occUtc = 0;
+        if (!occurrenceOnDateLocal(n, date, &occUtc)) continue;
+        applyMeta(day, n, occUtc);
       }
     }
     return meta;
@@ -374,6 +557,9 @@ std::array<CalendarDayMeta, 32> NoteRepository::monthMeta(int year, int month, s
 std::vector<Note> NoteRepository::listDue(int64_t nowUtcMs, int limit, std::wstring* errorOut) {
   std::vector<Note> out;
   try {
+    constexpr int64_t kGraceAtStartMs = 30 * 1000; // allow slight delay at start time
+    constexpr int64_t kRecentEditSuppressMs = 60 * 1000;   // 1 minute
+
     const fs::path root = AppPaths::notesRootDir();
     for (const auto& entry : fs::directory_iterator(root)) {
       if (!entry.is_directory()) continue;
@@ -384,13 +570,30 @@ std::vector<Note> NoteRepository::listDue(int64_t nowUtcMs, int limit, std::wstr
         continue;
       }
 
-      if (n.hasFired) continue;
       if (n.scheduledAtUtcMs == 0) continue;
-      // Уведомление показывается за reminderMinutesBefore минут до начала события
-      const int64_t reminderTimeMs = n.scheduledAtUtcMs - static_cast<int64_t>(n.reminderMinutesBefore) * 60000;
-      if (reminderTimeMs <= nowUtcMs) {
+      if (n.updatedAtUtcMs != 0 && (nowUtcMs - n.updatedAtUtcMs) < kRecentEditSuppressMs) continue;
+
+      if (n.repeatType == RepeatType::None) {
+        if (n.hasFired) continue;
+        // Уведомление показывается за reminderMinutesBefore минут до начала события
+        const int64_t reminderTimeMs = n.scheduledAtUtcMs - static_cast<int64_t>(n.reminderMinutesBefore) * 60000;
+        if (nowUtcMs < reminderTimeMs) continue;
+        const int64_t grace = (n.reminderMinutesBefore <= 0) ? kGraceAtStartMs : 0;
+        // Не показываем после времени события (кроме небольшого допуска для "в момент")
+        if (nowUtcMs > n.scheduledAtUtcMs + grace) continue;
         out.push_back(std::move(n));
+        continue;
       }
+
+      int64_t occUtc = 0;
+      if (!nextOccurrenceOnOrAfterNowDate(n, nowUtcMs, &occUtc)) continue;
+      const int64_t reminderTimeMs = occUtc - static_cast<int64_t>(n.reminderMinutesBefore) * 60000;
+      if (occUtc <= n.firedAtUtcMs) continue;
+      if (nowUtcMs < reminderTimeMs) continue;
+      const int64_t grace = (n.reminderMinutesBefore <= 0) ? kGraceAtStartMs : 0;
+      if (nowUtcMs > occUtc + grace) continue;
+      n.scheduledAtUtcMs = occUtc;
+      out.push_back(std::move(n));
     }
 
     std::sort(out.begin(), out.end(), [](const Note& a, const Note& b) {
