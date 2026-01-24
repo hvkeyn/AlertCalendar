@@ -63,6 +63,11 @@ cmake --build build --config Release
 - **Заметки и медиа**: `%APPDATA%\AlertCalendar\` (Roaming AppData)
 - **Настройки**: реестр `HKEY_CURRENT_USER\Software\AlertCalendar`
 
+## Импорт JSON и AI
+
+- Диалог **«Импорт JSON»** позволяет загрузить расписание из файла, вставки или AI.
+- Схема и примеры: `docs/json-schedule.md`
+
 ## Структура проекта
 
 - `src/win/` — окна/контролы WinAPI (MainWindow, NotificationWindow, CalendarView, темы, RichEdit утилиты)

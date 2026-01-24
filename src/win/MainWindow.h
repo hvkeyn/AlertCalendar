@@ -83,6 +83,7 @@ private:
   HWND m_list{};
   HWND m_btnAdd{};
   HWND m_btnRefresh{};
+  HWND m_btnImport{};
   HWND m_lblZoom{};
   HWND m_sliderZoom{};
   HWND m_lblTitle{};

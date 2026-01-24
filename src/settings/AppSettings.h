@@ -28,6 +28,16 @@ public:
   static void setSoundImportant(const std::wstring& value);
   static std::wstring soundUrgent();
   static void setSoundUrgent(const std::wstring& value);
+
+  // AI (OpenAI-compatible)
+  static std::wstring aiBaseUrl();
+  static void setAiBaseUrl(const std::wstring& value);
+  static std::wstring aiApiKey();
+  static void setAiApiKey(const std::wstring& value);
+  static std::wstring aiModel();
+  static void setAiModel(const std::wstring& value);
+  static int aiTimeoutSeconds();
+  static void setAiTimeoutSeconds(int seconds);
 };
 
 

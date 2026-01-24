@@ -10,6 +10,7 @@
 #include "win/ImageRtf.h"
 #include "win/MarkupConvert.h"
 #include "win/UiTheme.h"
+#include "win/ScheduleImportDialog.h"
 #include "win/AppIcon.h"
 #include "app/AppPaths.h"
 
@@ -35,6 +36,7 @@ constexpr int IDC_BTN_ADD = 1003;
 constexpr int IDC_BTN_REFRESH = 1004;
 constexpr int IDC_LBL_ZOOM = 1005;
 constexpr int IDC_SLIDER_ZOOM = 1006;
+constexpr int IDC_BTN_IMPORT = 1007;
 constexpr UINT_PTR TIMER_REMINDERS = 1;
 
 // Editor controls
@@ -715,6 +717,14 @@ void MainWindow::onCreate() {
   );
   registerButtonStyle(m_btnRefresh, BTN_STYLE_NEUTRAL);
 
+  m_btnImport = CreateWindowExW(
+    0, L"BUTTON", L"Импорт + ИИ",
+    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+    320, 10, 150, 36,
+    m_hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BTN_IMPORT)), m_hInstance, nullptr
+  );
+  registerButtonStyle(m_btnImport, BTN_STYLE_NEUTRAL);
+
   // Premium calendar view (custom drawn)
   m_calendarView = std::make_unique<CalendarView>();
   m_calendarView->create(m_hInstance, m_hwnd, IDC_CALENDAR);
@@ -1221,6 +1231,7 @@ void MainWindow::onCreate() {
   // Apply fonts
   SendMessageW(m_btnAdd, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_btnRefresh, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
+  SendMessageW(m_btnImport, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_lblZoom, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_list, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   SendMessageW(m_lblTitle, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
@@ -1376,6 +1387,8 @@ void MainWindow::onSize(int width, int height) {
   MoveWindow(m_btnAdd, x, btnY, sx(170), btnH, TRUE);
   x += sx(170) + gap;
   MoveWindow(m_btnRefresh, x, btnY, sx(110), btnH, TRUE);
+  x += sx(110) + gap;
+  MoveWindow(m_btnImport, x, btnY, sx(150), btnH, TRUE);
 
   // Zoom controls on the right
   const int sliderW = sx(160);
@@ -1587,6 +1600,20 @@ void MainWindow::onCommand(int id) {
       flushAutosave();
       refreshNotesForSelectedDate();
       return;
+    case IDC_BTN_IMPORT: {
+      flushAutosave();
+      ScheduleImportDialog dlg(m_hInstance, m_hwnd);
+      if (dlg.showModal()) {
+        refreshNotesForSelectedDate();
+        if (m_currentNote) {
+          if (!NoteRepository::getById(m_currentNote->id, nullptr)) {
+            m_currentNote.reset();
+            clearEditor();
+          }
+        }
+      }
+      return;
+    }
     case IDC_BTN_SAVE:
       flushAutosave();
       saveEditorToNote(true);
@@ -2717,6 +2744,7 @@ void MainWindow::applyUiZoom() {
   // Apply fonts to all controls
   SendMessageW(m_btnAdd, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_btnRefresh, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
+  SendMessageW(m_btnImport, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_lblZoom, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   SendMessageW(m_sliderZoom, WM_SETFONT, reinterpret_cast<WPARAM>(m_fontOwned), TRUE);
   if (m_calendarView) {

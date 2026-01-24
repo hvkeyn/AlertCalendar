@@ -144,4 +144,38 @@ void AppSettings::setSoundUrgent(const std::wstring& value) {
   writeStringValue(L"SoundUrgent", value);
 }
 
+std::wstring AppSettings::aiBaseUrl() {
+  return readStringValue(L"AiBaseUrl", L"https://api.openai.com");
+}
+
+void AppSettings::setAiBaseUrl(const std::wstring& value) {
+  writeStringValue(L"AiBaseUrl", value);
+}
+
+std::wstring AppSettings::aiApiKey() {
+  return readStringValue(L"AiApiKey", L"");
+}
+
+void AppSettings::setAiApiKey(const std::wstring& value) {
+  writeStringValue(L"AiApiKey", value);
+}
+
+std::wstring AppSettings::aiModel() {
+  return readStringValue(L"AiModel", L"gpt-4o-mini");
+}
+
+void AppSettings::setAiModel(const std::wstring& value) {
+  writeStringValue(L"AiModel", value);
+}
+
+int AppSettings::aiTimeoutSeconds() {
+  return static_cast<int>(readDwordValue(L"AiTimeoutSeconds", 30));
+}
+
+void AppSettings::setAiTimeoutSeconds(int seconds) {
+  if (seconds < 5) seconds = 5;
+  if (seconds > 300) seconds = 300;
+  writeDwordValue(L"AiTimeoutSeconds", static_cast<DWORD>(seconds));
+}
+
 

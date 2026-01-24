@@ -21,10 +21,16 @@ set(APP_SOURCES
   src/core/TimeUtils.cpp
   src/core/TimeUtils.h
 
+  src/import/ScheduleJson.cpp
+  src/import/ScheduleJson.h
+
   src/model/Note.h
   src/model/Note.cpp
   src/model/NoteRepository.cpp
   src/model/NoteRepository.h
+
+  src/net/HttpClient.cpp
+  src/net/HttpClient.h
 
   src/settings/AppSettings.cpp
   src/settings/AppSettings.h
@@ -45,6 +51,8 @@ set(APP_SOURCES
   src/win/ImageRtf.h
   src/win/MarkupConvert.cpp
   src/win/MarkupConvert.h
+  src/win/ScheduleImportDialog.cpp
+  src/win/ScheduleImportDialog.h
   src/win/UiTheme.cpp
   src/win/UiTheme.h
   src/win/WinUtil.cpp
@@ -73,6 +81,7 @@ target_link_libraries(AlertCalendar PRIVATE
   shlwapi
   dwmapi
   winmm
+  winhttp
 )
 
 if (MSVC)

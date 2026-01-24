@@ -825,7 +825,8 @@ void CalendarView::onPaint() {
     int lastBottom = gridTop - gap;
     for (const auto& n : m_dayNotes) {
       const SYSTEMTIME st = TimeUtils::unixMsToSystemTimeLocal(n.scheduledAtUtcMs);
-      const int minutes = st.wHour * 60 + st.wMinute;
+      const int minutesRaw = st.wHour * 60 + st.wMinute;
+      const int minutes = std::clamp(minutesRaw, 0, 1439);
       const int y = gridTop + (gridH * minutes) / 1440;
       const int h = m_dayDecorations ? std::max(minH, (gridH * 30) / 1440) : minH;
       RECT er{};
@@ -860,8 +861,10 @@ void CalendarView::onPaint() {
       const int dotY = erTop + std::max<int>(0, (boxH - dotRadius * 2) / 2) + dotRadius;
       drawDot(mem, dotX, dotY, dotRadius, imp, imp);
 
+      const int displayHour = minutes / 60;
+      const int displayMinute = minutes % 60;
       wchar_t timeBuf[16]{};
-      swprintf_s(timeBuf, L"%02d:%02d", st.wHour, st.wMinute);
+      swprintf_s(timeBuf, L"%02d:%02d", displayHour, displayMinute);
       std::wstring title = n.title.empty() ? L"(без названия)" : n.title;
       std::wstring text = timeBuf + std::wstring(L"  ") + title;
       RECT tx = er;
