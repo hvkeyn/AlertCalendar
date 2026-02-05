@@ -2137,8 +2137,9 @@ void MainWindow::setRepeatMaskUi(int mask) {
 }
 
 int MainWindow::defaultRepeatMaskForSelectedDate() const {
-  SYSTEMTIME day = normalizeLocalDate(selectedDateLocal());
-  return weekdayMaskFromWDayOfWeek(day.wDayOfWeek);
+  SYSTEMTIME day = selectedDateLocal();
+  const int dow = TimeUtils::weekdaySunday0(day);
+  return weekdayMaskFromWDayOfWeek(static_cast<WORD>(dow));
 }
 
 void MainWindow::updateRepeatUi() {

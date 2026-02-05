@@ -293,6 +293,11 @@ int weekdayMaskFromWDayOfWeek(WORD dow) {
   }
 }
 
+int weekdayMaskFromDate(const SYSTEMTIME& date) {
+  const int dow = TimeUtils::weekdaySunday0(date);
+  return weekdayMaskFromWDayOfWeek(static_cast<WORD>(dow));
+}
+
 int effectiveWeeklyMask(const Note& n, const SYSTEMTIME& startLocal) {
   if (n.repeatWeekdaysMask != 0) return n.repeatWeekdaysMask;
   return weekdayMaskFromWDayOfWeek(startLocal.wDayOfWeek);
@@ -319,7 +324,7 @@ bool occurrenceOnDateLocal(const Note& n, const SYSTEMTIME& localDate, int64_t* 
     if (!isSameLocalDate(date, startDate)) return false;
   } else if (n.repeatType == RepeatType::Weekly) {
     const int mask = effectiveWeeklyMask(n, startLocal);
-    const int dayMask = weekdayMaskFromWDayOfWeek(date.wDayOfWeek);
+    const int dayMask = weekdayMaskFromDate(date);
     if ((mask & dayMask) == 0) return false;
   } else if (n.repeatType != RepeatType::Daily) {
     return false;
@@ -359,7 +364,7 @@ bool nextOccurrenceOnOrAfterNowDate(const Note& n, int64_t nowUtcMs, int64_t* ou
     for (int ahead = 0; ahead < 14; ++ahead) {
       SYSTEMTIME date = addDaysLocalDate(base, ahead);
       if (!isOnOrAfterLocalDate(date, startDate)) continue;
-      const int dayMask = weekdayMaskFromWDayOfWeek(date.wDayOfWeek);
+      const int dayMask = weekdayMaskFromDate(date);
       if ((mask & dayMask) == 0) continue;
       const SYSTEMTIME occLocal = withStartTime(date, startLocal);
       const int64_t occUtc = TimeUtils::localSystemTimeToUnixMsUtc(occLocal);

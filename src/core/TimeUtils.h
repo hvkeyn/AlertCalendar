@@ -14,6 +14,10 @@ SYSTEMTIME unixMsToSystemTimeUtc(int64_t msUtc);
 
 SYSTEMTIME unixMsToSystemTimeLocal(int64_t msUtc);
 int64_t localSystemTimeToUnixMsUtc(const SYSTEMTIME& stLocal);
+
+// Day of week: 0=Sunday .. 6=Saturday
+int weekdaySunday0(int year, int month, int day);
+int weekdaySunday0(const SYSTEMTIME& stLocal);
 }
 
 

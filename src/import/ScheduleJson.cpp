@@ -737,7 +737,8 @@ bool ScheduleJson::parseSchedule(const std::wstring& jsonText, ImportResult* out
             }
             if (mask == 0) {
               if (item.hasDateTime) {
-                mask = weekdayMaskFromWDayOfWeek(item.localDateTime.wDayOfWeek);
+                const int dow = TimeUtils::weekdaySunday0(item.localDateTime);
+                mask = weekdayMaskFromWDayOfWeek(static_cast<WORD>(dow));
                 item.warnings.push_back(L"repeat.weekdays не задан; использован день даты.");
               } else {
                 item.errors.push_back(L"repeat.weekdays обязателен для weekly.");
